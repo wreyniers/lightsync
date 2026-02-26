@@ -1,0 +1,279 @@
+@import "tailwindcss";
+
+@theme {
+  --color-background: #0a0a0f;
+  --color-foreground: #fafafa;
+  --color-card: #111118;
+  --color-card-foreground: #fafafa;
+  --color-popover: #111118;
+  --color-popover-foreground: #fafafa;
+  --color-primary: #6366f1;
+  --color-primary-foreground: #fafafa;
+  --color-secondary: #1e1e2e;
+  --color-secondary-foreground: #fafafa;
+  --color-muted: #1a1a24;
+  --color-muted-foreground: #a1a1aa;
+  --color-accent: #6366f1;
+  --color-accent-foreground: #fafafa;
+  --color-destructive: #ef4444;
+  --color-destructive-foreground: #fafafa;
+  --color-success: #22c55e;
+  --color-success-foreground: #fafafa;
+  --color-warning: #f59e0b;
+  --color-warning-foreground: #0a0a0f;
+  --color-border: #27272a;
+  --color-input: #27272a;
+  --color-ring: #6366f1;
+  --radius: 0.75rem;
+
+  --font-sans: "Inter", system-ui, -apple-system, sans-serif;
+}
+
+* {
+  border-color: var(--color-border);
+}
+
+body {
+  background-color: var(--color-background);
+  color: var(--color-foreground);
+  font-family: var(--font-sans);
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--color-background);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-muted-foreground);
+}
+
+/* Rocker Switch — dark 3D toggle, tuned to app theme */
+.rs {
+  --rs-hue: 240;
+  --rs-sat: 18%;
+  --rs-dur: 0.3s;
+  --rs-ease: cubic-bezier(0.83, 0, 0.17, 1);
+  --rs-light-color: hsl(142, 71%, 55%);
+  display: inline-block;
+  border-radius: 1.5em;
+  box-shadow: 0 0.125em 0.25em hsla(0, 0%, 0%, 0.5);
+  position: relative;
+  width: 4.5em;
+  height: 3em;
+  perspective: 8em;
+  font-size: 9px;
+  flex-shrink: 0;
+}
+.rs span {
+  display: block;
+}
+.rs > span {
+  border-radius: inherit;
+  z-index: 1;
+}
+.rs__surface-glare,
+.rs__inner,
+.rs__inner-glare,
+.rs__rocker-sides,
+.rs__rocker-sides-glare,
+.rs__rocker,
+.rs__rocker-glare,
+.rs__light {
+  transition: transform var(--rs-dur) var(--rs-ease);
+}
+.rs__surface {
+  background-color: hsl(var(--rs-hue), var(--rs-sat), 22%);
+  overflow: hidden;
+  width: 100%;
+  height: 100%;
+}
+.rs > .rs__surface {
+  z-index: 0;
+}
+.rs__surface-glare {
+  background-image: radial-gradient(
+    50% 50% at center,
+    hsla(var(--rs-hue), var(--rs-sat), 42%, 1),
+    hsla(var(--rs-hue), var(--rs-sat), 42%, 0)
+  );
+  width: 3em;
+  height: 3em;
+  transform: translate(0, 0.125em);
+}
+.rs__input {
+  background-color: hsl(var(--rs-hue), var(--rs-sat), 20%);
+  border-radius: 1.5em;
+  box-shadow: 0 0 0 0.125em hsla(239, 84%, 67%, 0);
+  outline: transparent;
+  position: absolute;
+  top: 0.0625em;
+  left: 0.0625em;
+  width: calc(100% - 0.125em);
+  height: calc(100% - 0.125em);
+  transition: box-shadow 0.15s linear;
+  z-index: 1;
+  appearance: none;
+  -webkit-appearance: none;
+  -webkit-tap-highlight-color: transparent;
+  cursor: pointer;
+  border: 0;
+  margin: 0;
+  padding: 0;
+}
+.rs__input:focus-visible {
+  box-shadow: 0 0 0 0.125em hsla(239, 84%, 67%, 1);
+}
+.rs__inner {
+  background-color: hsl(var(--rs-hue), var(--rs-sat), 22%);
+  overflow: hidden;
+  position: absolute;
+  inset: 0.5em;
+  transform: translate(0.1875em, 0);
+}
+.rs__inner-glare {
+  background-image: radial-gradient(
+    50% 50% at center,
+    hsla(var(--rs-hue), var(--rs-sat), 42%, 1),
+    hsla(var(--rs-hue), var(--rs-sat), 42%, 0)
+  );
+  position: absolute;
+  width: 2em;
+  height: 2em;
+  transform: translate(100%, -0.5em);
+}
+.rs__inner-shadow {
+  box-shadow: 0 0.125em 0.25em hsla(0, 0%, 0%, 0.5);
+  position: absolute;
+  inset: 0.5em;
+}
+.rs__rocker-shadow {
+  box-shadow: 0 0.1875em 0.375em hsla(0, 0%, 0%, 0.7);
+  position: absolute;
+  top: 0.5625em;
+  right: 0.5625em;
+  bottom: 0.5625em;
+  left: 0.75em;
+}
+.rs__rocker-sides {
+  background-color: hsl(var(--rs-hue), var(--rs-sat), 20%);
+  overflow: hidden;
+  position: absolute;
+  inset: 0.5em;
+  transform: rotateY(-30deg) translateZ(0.5em);
+  transform-style: preserve-3d;
+}
+.rs__rocker-sides-glare {
+  background-image: linear-gradient(
+    90deg,
+    hsla(var(--rs-hue), var(--rs-sat), 32%, 0),
+    hsla(var(--rs-hue), var(--rs-sat), 32%, 1),
+    hsla(var(--rs-hue), var(--rs-sat), 32%, 0)
+  );
+  position: absolute;
+  width: 200%;
+  height: 100%;
+}
+.rs__rocker {
+  background-color: hsl(var(--rs-hue), var(--rs-sat), 20%);
+  overflow: hidden;
+  position: absolute;
+  inset: 0.5625em;
+  transform: rotateY(-30deg) translateZ(0.5em);
+  transform-style: preserve-3d;
+}
+.rs__rocker-glare {
+  background-image: linear-gradient(
+    120deg,
+    hsla(var(--rs-hue), var(--rs-sat), 24%, 0) 20%,
+    hsla(var(--rs-hue), var(--rs-sat), 24%, 1) 50%,
+    hsla(var(--rs-hue), var(--rs-sat), 24%, 0) 80%
+  );
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  transform: translateX(-45%);
+}
+.rs__light {
+  background-image: linear-gradient(
+    -45deg,
+    hsl(var(--rs-hue), var(--rs-sat), 28%) 30%,
+    hsl(var(--rs-hue), var(--rs-sat), 48%)
+  );
+  box-shadow: 0 0 max(1px, 0.05em) hsla(var(--rs-hue), var(--rs-sat), 8%, 0.3)
+    inset;
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 0.5em;
+  height: 0.5em;
+  transform: translate(-50%, -50%) rotateY(-30deg) translateX(1.125em)
+    translateZ(0.51em);
+}
+.rs__light-inner {
+  background-color: var(--rs-light-color);
+  box-shadow:
+    0 0 max(1px, 0.05em) hsla(var(--rs-hue), var(--rs-sat), 8%, 0.3) inset,
+    0 0 0.5em 0.15em var(--rs-light-color);
+  border-radius: 50%;
+  opacity: 0;
+  width: 100%;
+  height: 100%;
+  transition: opacity var(--rs-dur) var(--rs-ease);
+}
+
+/* Checked / "On" state */
+.rs__input:checked ~ .rs__surface .rs__surface-glare {
+  transform: translate(3em, 0.125em);
+}
+.rs__input:checked ~ .rs__inner {
+  transform: translate(-0.1875em, 0);
+}
+.rs__input:checked ~ .rs__inner .rs__inner-glare {
+  transform: translate(0, -0.5em);
+}
+.rs__input:checked ~ .rs__rocker {
+  transform: rotateY(30deg) translateZ(0.5em);
+}
+.rs__input:checked ~ .rs__rocker .rs__rocker-glare {
+  transform: translateX(45%);
+}
+.rs__input:checked ~ .rs__rocker-sides {
+  transform: rotateY(30deg) translateZ(0.5em);
+}
+.rs__input:checked ~ .rs__rocker-sides .rs__rocker-sides-glare {
+  transform: translateX(-50%);
+}
+.rs__input:checked ~ .rs__light {
+  transform: translate(-50%, -50%) rotateY(30deg) translateX(1.125em)
+    translateZ(0.51em);
+}
+.rs__input:checked ~ .rs__light .rs__light-inner {
+  opacity: 1;
+}
+
+/* iro.js color picker — dark theme integration */
+.color-picker-panel .IroColorPicker {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+/* Slider track background */
+.color-picker-panel .IroSlider {
+  border-radius: 6px;
+  overflow: hidden;
+}
+/* Remove any default white backgrounds iro might render */
+.color-picker-panel svg,
+.color-picker-panel canvas {
+  display: block;
+}
