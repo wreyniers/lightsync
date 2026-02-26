@@ -1,86 +1,29 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
-  Search,
-  Lightbulb,
-  Loader2,
   Wifi,
-  CheckCircle2,
-  X,
+  Settings2,
 } from "lucide-react";
 import { Card } from "@/components/ui/Card";
-import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
 import { LightCard } from "@/components/ui/LightCard";
+import { RoomPanel, RoomGroupHeader } from "@/components/ui/RoomPanel";
 import { useLightStore, lightActions } from "@/hooks/useLightStore";
-import { getBrandInfo, groupByBrand } from "@/lib/brands";
+import { groupByRoom } from "@/lib/brands";
+import { sortedRoomKeys } from "@/lib/rooms";
 import type { Device, LightMode } from "@/lib/types";
 import { DEFAULT_KELVIN } from "@/lib/types";
 import { resolveMode } from "@/lib/utils";
-import { EventsOn } from "../../wailsjs/runtime/runtime";
-
-interface ScanProgress {
-  phase: string;
-  message: string;
-  devices?: Device[];
-}
 
 export function Lights() {
   const { devices, deviceOn, brightness, kelvin, color } = useLightStore();
 
-
-  const [scanning, setScanning] = useState(false);
-  const [showScanCard, setShowScanCard] = useState(false);
-  const [scanMessage, setScanMessage] = useState("");
-  const [scanPhase, setScanPhase] = useState("");
-  const [foundDevices, setFoundDevices] = useState<Device[]>([]);
   const [modeOverrides, setModeOverrides] = useState<Record<string, LightMode>>({});
-  const cleanupRef = useRef<(() => void) | null>(null);
+  const [openRoomDeviceId, setOpenRoomDeviceId] = useState<string | null>(null);
+  const cogButtonRefs = useRef<Record<string, HTMLButtonElement | null>>({});
+  const activeAnchorRef = useRef<HTMLButtonElement | null>(null);
 
   useEffect(() => {
     lightActions.refreshDevices();
-  }, []);
-
-  const dismissScan = useCallback(() => {
-    setShowScanCard(false);
-    setScanMessage("");
-    setScanPhase("");
-    setFoundDevices([]);
-  }, []);
-
-  const handleScan = useCallback(async () => {
-    setScanning(true);
-    setShowScanCard(true);
-    setScanMessage("Starting network scan...");
-    setScanPhase("");
-    setFoundDevices([]);
-
-    cleanupRef.current = EventsOn("scan:progress", (progress: ScanProgress) => {
-      setScanMessage(progress.message);
-      setScanPhase(progress.phase);
-      if (progress.devices && progress.devices.length > 0) {
-        setFoundDevices((prev) => {
-          const existingIds = new Set(prev.map((d) => d.id));
-          const incoming = progress.devices!.filter((d) => !existingIds.has(d.id));
-          return incoming.length > 0 ? [...prev, ...incoming] : prev;
-        });
-      }
-    });
-
-    try {
-      await lightActions.discoverLights();
-    } catch (e) {
-      console.error("Discovery failed:", e);
-    }
-
-    cleanupRef.current?.();
-    cleanupRef.current = null;
-    setScanning(false);
-  }, []);
-
-  useEffect(() => {
-    return () => {
-      if (cleanupRef.current) cleanupRef.current();
-    };
   }, []);
 
   function switchMode(deviceId: string, newMode: LightMode) {
@@ -104,121 +47,92 @@ export function Lights() {
     }
   }
 
-  const grouped = groupByBrand(devices);
+  const grouped = groupByRoom(devices);
+  const roomKeys = sortedRoomKeys(grouped);
+
+  function openRoomPanel(deviceId: string) {
+    activeAnchorRef.current = cogButtonRefs.current[deviceId] ?? null;
+    setOpenRoomDeviceId(deviceId);
+  }
 
   return (
     <div className="space-y-8">
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-2xl font-bold tracking-tight">Lights</h2>
-          <p className="text-muted-foreground mt-1">
-            Discover and control your smart lights
-          </p>
-        </div>
-        <Button onClick={handleScan} disabled={scanning}>
-          {scanning ? (
-            <Loader2 className="h-4 w-4 animate-spin" />
-          ) : (
-            <Search className="h-4 w-4" />
-          )}
-          {scanning ? "Scanning..." : "Scan Network"}
-        </Button>
-      </div>
-
-
-      {devices.length === 0 && !scanning && !showScanCard && (
+      {devices.length === 0 && (
         <Card className="flex flex-col items-center justify-center py-16 text-center">
           <Wifi className="h-12 w-12 text-muted-foreground/40 mb-4" />
           <h3 className="text-lg font-semibold">No Lights Found</h3>
           <p className="text-sm text-muted-foreground mt-2 max-w-md">
-            Click "Scan Network" to discover LIFX, Hue, Elgato, and Govee
-            lights on your local network.
+            Go to Settings and scan your network to discover LIFX, Hue, Elgato,
+            and Govee lights.
           </p>
-          <Button onClick={handleScan} className="mt-6">
-            <Search className="h-4 w-4" />
-            Scan Network
-          </Button>
         </Card>
       )}
 
-      {showScanCard && (
-        <Card className="py-6 px-6 space-y-4">
-          <div className="flex items-center gap-3">
-            {scanPhase === "done" ? (
-              <CheckCircle2 className="h-5 w-5 text-green-500" />
-            ) : (
-              <Loader2 className="h-5 w-5 animate-spin text-primary" />
-            )}
-            <p className="text-sm font-medium flex-1">{scanMessage}</p>
-            {!scanning && (
-              <button
-                type="button"
-                onClick={dismissScan}
-                className="text-muted-foreground hover:text-foreground transition-colors"
-                aria-label="Dismiss"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            )}
-          </div>
-          {foundDevices.length > 0 && (
-            <div className="space-y-1.5 pt-2">
-              <p className="text-xs text-muted-foreground font-medium mb-2">
-                Discovered lights
-              </p>
-              {foundDevices.map((d) => {
-                const info = getBrandInfo(d.brand);
-                return (
-                  <div
-                    key={d.id}
-                    className="flex items-center gap-2 text-sm animate-in fade-in slide-in-from-left-2 duration-300"
-                  >
-                    <Lightbulb className={`h-3.5 w-3.5 ${info.color}`} />
-                    <span>{d.name}</span>
-                    <span className="text-xs text-muted-foreground">
-                      {info.label}
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </Card>
-      )}
-
-      {Object.entries(grouped).map(([brand, brandDevices]) => {
-        const info = getBrandInfo(brand);
+      {roomKeys.map((roomKey) => {
+        const roomDevices = grouped[roomKey];
         return (
-          <div key={brand}>
+          <div key={roomKey}>
             <div className="flex items-center gap-2 mb-3">
-              <Lightbulb className={`h-5 w-5 ${info.color}`} />
-              <h3 className="text-lg font-semibold">{info.label}</h3>
-              <Badge variant="secondary">{brandDevices.length}</Badge>
+              <RoomGroupHeader room={roomKey} />
+              <Badge variant="secondary">{roomDevices.length}</Badge>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              {brandDevices.map((device) => {
+              {roomDevices.map((device) => {
                 const mode = resolveMode(device.id, modeOverrides, color, kelvin);
                 return (
-                  <LightCard
-                    key={device.id}
-                    device={device}
-                    on={deviceOn[device.id] ?? false}
-                    brightness={brightness[device.id] ?? 0}
-                    kelvin={kelvin[device.id] ?? DEFAULT_KELVIN}
-                    color={color[device.id]}
-                    mode={mode}
-                    onToggle={(on) => lightActions.toggleLight(device.id, on)}
-                    onBrightness={(value) => handleCardBrightness(device, value)}
-                    onModeSwitch={(m) => switchMode(device.id, m)}
-                    onKelvin={(k) => lightActions.setKelvin(device.id, k)}
-                    onColor={(c) => lightActions.setColor(device.id, c)}
-                  />
+                  <div key={device.id} className="relative group/lightcard">
+                    <LightCard
+                      device={device}
+                      on={deviceOn[device.id] ?? false}
+                      brightness={brightness[device.id] ?? 0}
+                      kelvin={kelvin[device.id] ?? DEFAULT_KELVIN}
+                      color={color[device.id]}
+                      mode={mode}
+                      onToggle={(on) => lightActions.toggleLight(device.id, on)}
+                      onBrightness={(value) => handleCardBrightness(device, value)}
+                      onModeSwitch={(m) => switchMode(device.id, m)}
+                      onKelvin={(k) => lightActions.setKelvin(device.id, k)}
+                      onColor={(c) => lightActions.setColor(device.id, c)}
+                    />
+                    <button
+                      ref={(el) => { cogButtonRefs.current[device.id] = el; }}
+                      type="button"
+                      title="Light settings"
+                      onClick={() => openRoomPanel(device.id)}
+                      className="absolute -top-1.5 -right-1.5 z-30 h-5 w-5 rounded-full bg-card border border-border shadow-sm flex items-center justify-center opacity-0 group-hover/lightcard:opacity-100 transition-opacity hover:border-primary/50 hover:text-primary"
+                    >
+                      <Settings2 className="h-3 w-3 text-muted-foreground" />
+                    </button>
+                  </div>
                 );
               })}
             </div>
           </div>
         );
       })}
+
+      {/* Single RoomPanel rendered outside the groups loop so it never
+          unmounts/remounts when a device moves between room groups. */}
+      {(() => {
+        const openDevice = openRoomDeviceId
+          ? devices.find((d) => d.id === openRoomDeviceId)
+          : undefined;
+        return (
+          <RoomPanel
+            open={!!openDevice}
+            anchorRef={activeAnchorRef as React.RefObject<HTMLButtonElement>}
+            currentRoom={openDevice?.room}
+            deviceName={openDevice?.name ?? ""}
+            onRoomChange={(room) =>
+              openRoomDeviceId && lightActions.setDeviceRoom(openRoomDeviceId, room)
+            }
+            onRemove={() =>
+              openRoomDeviceId && lightActions.removeDevice(openRoomDeviceId)
+            }
+            onClose={() => setOpenRoomDeviceId(null)}
+          />
+        );
+      })()}
     </div>
   );
 }

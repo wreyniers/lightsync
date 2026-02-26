@@ -49,6 +49,7 @@ export namespace lights {
 	    maxKelvin?: number;
 	    kelvinStep?: number;
 	    firmwareVersion?: string;
+	    room?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new Device(source);
@@ -68,6 +69,7 @@ export namespace lights {
 	        this.maxKelvin = source["maxKelvin"];
 	        this.kelvinStep = source["kelvinStep"];
 	        this.firmwareVersion = source["firmwareVersion"];
+	        this.room = source["room"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

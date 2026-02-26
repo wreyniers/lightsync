@@ -15,6 +15,8 @@ export interface Device {
   kelvinStep?: number;
   /** Firmware/software version string reported by the device. */
   firmwareVersion?: string;
+  /** User-assigned room label used for grouping (e.g. "Bedroom", "Office"). */
+  room?: string;
 }
 
 export interface DeviceState {

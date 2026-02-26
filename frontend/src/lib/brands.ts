@@ -19,3 +19,20 @@ export function groupByBrand(devices: Device[]): Record<string, Device[]> {
   }
   return grouped;
 }
+
+export const UNASSIGNED_KEY = "__unassigned__";
+
+/**
+ * Groups devices by their assigned room. Devices without a room fall into
+ * UNASSIGNED_KEY. Groups are ordered: preset rooms first (in preset order),
+ * then custom rooms alphabetically, then unassigned last.
+ */
+export function groupByRoom(devices: Device[]): Record<string, Device[]> {
+  const grouped: Record<string, Device[]> = {};
+  for (const d of devices) {
+    const key = d.room?.trim() || UNASSIGNED_KEY;
+    if (!grouped[key]) grouped[key] = [];
+    grouped[key].push(d);
+  }
+  return grouped;
+}

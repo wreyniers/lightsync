@@ -131,6 +131,16 @@ func (a *App) GetDevices() []lights.Device {
 	return a.lightManager.GetDevices()
 }
 
+func (a *App) RemoveDevice(deviceID string) error {
+	a.lightManager.RemoveDevice(deviceID)
+	return a.store.SetDevices(a.lightManager.GetDevices())
+}
+
+func (a *App) SetDeviceRoom(deviceID, room string) error {
+	a.lightManager.SetDeviceRoom(deviceID, room)
+	return a.store.SetDevices(a.lightManager.GetDevices())
+}
+
 // --- Light Control ---
 
 func (a *App) SetLightState(deviceID string, state lights.DeviceState) error {
@@ -246,6 +256,17 @@ func (a *App) AddHueBridge(ip, username string) error {
 
 func (a *App) GetHueBridges() []store.HueBridge {
 	return a.store.GetHueBridges()
+}
+
+func (a *App) RemoveHueBridge(id string) error {
+	bridges := a.store.GetHueBridges()
+	filtered := make([]store.HueBridge, 0, len(bridges))
+	for _, b := range bridges {
+		if b.ID != id {
+			filtered = append(filtered, b)
+		}
+	}
+	return a.store.SetHueBridges(filtered)
 }
 
 func (a *App) DiscoverHueBridges() []discovery.DiscoveredHueBridge {

@@ -75,6 +75,9 @@ func (m *Manager) DiscoverAllWithProgress(ctx context.Context, onDevices func([]
 
 	m.mu.Lock()
 	for _, d := range allDevices {
+		if existing, ok := m.devices[d.ID]; ok {
+			d.Room = existing.Room
+		}
 		m.devices[d.ID] = d
 	}
 	m.mu.Unlock()
@@ -151,6 +154,21 @@ func (m *Manager) SetDevices(devices []Device) {
 	defer m.mu.Unlock()
 	for _, d := range devices {
 		m.devices[d.ID] = d
+	}
+}
+
+func (m *Manager) RemoveDevice(deviceID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.devices, deviceID)
+}
+
+func (m *Manager) SetDeviceRoom(deviceID, room string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if d, ok := m.devices[deviceID]; ok {
+		d.Room = room
+		m.devices[deviceID] = d
 	}
 }
 

@@ -39,6 +39,12 @@ export function IsMonitoringEnabled():Promise<boolean>;
 
 export function PairHueBridge(arg1:string):Promise<main.PairResult>;
 
+export function RemoveDevice(arg1:string):Promise<void>;
+
+export function RemoveHueBridge(arg1:string):Promise<void>;
+
+export function SetDeviceRoom(arg1:string,arg2:string):Promise<void>;
+
 export function SetLightState(arg1:string,arg2:lights.DeviceState):Promise<void>;
 
 export function SetMonitoringEnabled(arg1:boolean):Promise<void>;

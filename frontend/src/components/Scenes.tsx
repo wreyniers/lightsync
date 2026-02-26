@@ -19,7 +19,8 @@ import { SegmentedControl } from "@/components/ui/SegmentedControl";
 import type { Device, DeviceState, Color, LightMode } from "@/lib/types";
 import { DEFAULT_KELVIN } from "@/lib/types";
 import { hueToKelvin, kelvinToHSB } from "@/lib/utils";
-import { getBrandInfo, groupByBrand } from "@/lib/brands";
+import { groupByRoom, UNASSIGNED_KEY } from "@/lib/brands";
+import { getRoomIcon, sortedRoomKeys } from "@/lib/rooms";
 import { sceneSwatchBackground } from "@/lib/sceneColors";
 import { SceneRow } from "@/components/SceneRow";
 import { useLightStore, lightActions } from "@/hooks/useLightStore";
@@ -369,82 +370,73 @@ export function Scenes() {
   }
   const isEditing = creating || editing !== null;
 
+  const grouped = groupByRoom(devices);
+  const roomKeys = sortedRoomKeys(grouped);
+
   return (
     <div className="space-y-8">
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-2xl font-bold tracking-tight">Scenes</h2>
-          <p className="text-muted-foreground mt-1">
-            Configure what happens when your camera turns on or off
-          </p>
-        </div>
-        {!isEditing && (
+      {!isEditing && (
+        <div className="flex justify-end">
           <Button onClick={startCreate}>
             <Plus className="h-4 w-4" />
             New Scene
           </Button>
-        )}
-      </div>
+        </div>
+      )}
 
       {isEditing && (
         <Card className="space-y-6 bg-secondary">
+          {/* Header */}
           <div className="flex items-center justify-between">
-            <h3 className="text-lg font-semibold">
-              {creating ? "Create Scene" : "Edit Scene"}
-            </h3>
-            <Button variant="ghost" size="icon" onClick={cancelEdit}>
-              <X className="h-4 w-4" />
-            </Button>
-          </div>
-
-          <div className="space-y-4">
-            {/* Name */}
             <div>
-              <label className="text-sm font-medium mb-1.5 block">Scene Name</label>
+              <p className="text-xs font-medium uppercase tracking-widest text-muted-foreground mb-0.5">
+                {creating ? "New Scene" : "Edit Scene"}
+              </p>
               <input
                 type="text"
                 value={newName}
                 onChange={(e) => setNewName(e.target.value)}
-                placeholder="e.g., On Air, Meeting, Off Duty"
-                className="w-full rounded-lg bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+                placeholder="Scene name…"
+                className="text-xl font-bold bg-transparent focus:outline-none focus:ring-0 placeholder:text-muted-foreground/40 w-full"
               />
             </div>
+            <button
+              type="button"
+              onClick={cancelEdit}
+              className="h-8 w-8 rounded-full flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-white/10 transition-colors shrink-0"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
 
+          <div className="space-y-5">
             {/* Trigger */}
             <div>
-              <label className="text-sm font-medium mb-1.5 block">Trigger</label>
-              <div className="flex gap-3">
-                <button
-                  onClick={() => setNewTrigger("")}
-                  className={`flex-1 flex items-center justify-center gap-2 rounded-lg p-3 text-sm transition-colors ${
-                    newTrigger === ""
-                      ? "bg-primary/10 text-primary"
-                      : "hover:bg-secondary text-muted-foreground"
-                  }`}
-                >
-                  <Play className="h-4 w-4" />
-                  Manual Only
-                </button>
-                {(["camera_on", "camera_off"] as const).map((t) => {
-                  const taken = takenTriggers.has(t);
-                  const Icon = t === "camera_on" ? Camera : CameraOff;
-                  const label = t === "camera_on" ? "Camera On" : "Camera Off";
+              <p className="text-xs font-medium uppercase tracking-widest text-muted-foreground mb-2.5">Trigger</p>
+              <div className="flex gap-2">
+                {([
+                  { value: "", icon: Play, label: "Manual Only", taken: false },
+                  { value: "camera_on", icon: Camera, label: "Camera On", taken: takenTriggers.has("camera_on") },
+                  { value: "camera_off", icon: CameraOff, label: "Camera Off", taken: takenTriggers.has("camera_off") },
+                ] as const).map(({ value: t, icon: Icon, label, taken }) => {
+                  const active = newTrigger === t;
                   return (
                     <button
                       key={t}
+                      type="button"
                       onClick={() => !taken && setNewTrigger(t)}
                       disabled={taken}
                       title={taken ? "Already used by another scene" : undefined}
-                      className={`flex-1 flex items-center justify-center gap-2 rounded-lg p-3 text-sm transition-colors ${
-                        newTrigger === t
-                          ? "bg-primary/10 text-primary"
+                      className={`flex-1 flex flex-col items-center gap-2 rounded-xl py-3.5 transition-all ${
+                        active
+                          ? "bg-primary/15 text-primary"
                           : taken
-                          ? "opacity-40 cursor-not-allowed text-muted-foreground"
-                          : "hover:bg-secondary text-muted-foreground"
+                          ? "opacity-30 cursor-not-allowed text-muted-foreground bg-background/20"
+                          : "bg-background/30 text-muted-foreground hover:bg-background/60 hover:text-foreground"
                       }`}
                     >
-                      <Icon className="h-4 w-4" />
-                      {label}
+                      <Icon className={`h-5 w-5 ${active ? "opacity-100" : "opacity-70"}`} />
+                      <span className="text-xs font-medium">{label}</span>
                     </button>
                   );
                 })}
@@ -453,34 +445,28 @@ export function Scenes() {
 
             {/* Global Override */}
             {(anyDeviceSupportsColor || anyDeviceSupportsKelvin) && (
-              <div className="bg-card rounded-xl p-4 space-y-4">
+              <div className="space-y-3">
                 <div className="flex items-center gap-2">
-                  <Palette className="h-4 w-4 text-muted-foreground" />
-                  <p className="text-sm font-medium">Global Colors</p>
-                  <p className="text-xs text-muted-foreground ml-1">— applies the same color or temperature to all lights</p>
+                  <Palette className="h-3.5 w-3.5 text-muted-foreground" />
+                  <p className="text-xs font-medium uppercase tracking-widest text-muted-foreground">Global Color</p>
                 </div>
 
-                {/* Mode tabs */}
                 <SegmentedControl<GlobalMode>
                   options={[
                     { value: "none", label: "Off" },
-                    ...(anyDeviceSupportsColor
-                      ? [{ value: "color" as const, label: "Color" }]
-                      : []),
-                    ...(anyDeviceSupportsKelvin
-                      ? [{ value: "kelvin" as const, label: "Temperature" }]
-                      : []),
+                    ...(anyDeviceSupportsColor ? [{ value: "color" as const, label: "Color" }] : []),
+                    ...(anyDeviceSupportsKelvin ? [{ value: "kelvin" as const, label: "Temperature" }] : []),
                   ]}
                   value={globalMode}
-                  onChange={(mode) => {
-                    setGlobalMode(mode);
-                    if (mode === "color") previewGlobalColor(globalColorValue);
-                    if (mode === "kelvin") previewGlobalKelvin(globalKelvin);
+                  onChange={(m) => {
+                    setGlobalMode(m);
+                    if (m === "color") previewGlobalColor(globalColorValue);
+                    if (m === "kelvin") previewGlobalKelvin(globalKelvin);
                   }}
                 />
 
                 {globalMode === "color" && (
-                  <div className="flex flex-col items-center gap-2">
+                  <div className="flex flex-col items-center gap-2 pt-1">
                     <ColorWheel
                       color={globalColorValue}
                       brightness={100}
@@ -496,7 +482,7 @@ export function Scenes() {
                 )}
 
                 {globalMode === "kelvin" && (
-                  <div className="flex flex-col items-center gap-1">
+                  <div className="flex flex-col items-center gap-1 pt-1">
                     <KelvinSlider
                       kelvin={globalKelvin}
                       onChange={(k) => {
@@ -512,25 +498,27 @@ export function Scenes() {
 
             {/* Per-device list */}
             <div>
-              <label className="text-sm font-medium mb-1.5 block">Lights in Scene</label>
+              <p className="text-xs font-medium uppercase tracking-widest text-muted-foreground mb-2.5">Lights in Scene</p>
               {devices.length === 0 ? (
                 <p className="text-sm text-muted-foreground">
                   No lights discovered. Go to the Lights page to scan your network first.
                 </p>
               ) : (
                 <div className="space-y-5">
-                  {Object.entries(groupByBrand(devices)).map(([brand, brandDevices]) => {
-                    const info = getBrandInfo(brand);
+                  {roomKeys.map((roomKey) => {
+                    const roomDevices = grouped[roomKey];
+                    const RoomIcon = getRoomIcon(roomKey === UNASSIGNED_KEY ? undefined : roomKey);
+                    const roomLabel = roomKey === UNASSIGNED_KEY ? "Unassigned" : roomKey;
                     return (
-                      <div key={brand}>
+                      <div key={roomKey}>
                         <div className="flex items-center gap-2 mb-2">
-                          <Lightbulb className={`h-4 w-4 ${info.color}`} />
+                          <RoomIcon className="h-4 w-4 text-muted-foreground" />
                           <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                            {info.label}
+                            {roomLabel}
                           </span>
                         </div>
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                          {brandDevices.map((device) => {
+                          {roomDevices.map((device) => {
                             const included = !!newDevices[device.id];
                             const devState = newDevices[device.id];
                             const devMode = getDeviceMode(device.id);
@@ -639,8 +627,14 @@ export function Scenes() {
             </div>
           </div>
 
-          <div className="flex justify-end gap-3 pt-2">
-            <Button variant="outline" onClick={cancelEdit}>Cancel</Button>
+          <div className="flex justify-end gap-2 pt-1">
+            <button
+              type="button"
+              onClick={cancelEdit}
+              className="px-4 py-2 rounded-lg text-sm text-muted-foreground hover:text-foreground hover:bg-white/10 transition-colors"
+            >
+              Cancel
+            </button>
             <Button onClick={handleSave} disabled={!newName.trim() || !isDirty}>
               <Check className="h-4 w-4" />
               {creating ? "Create Scene" : "Save Changes"}
@@ -663,17 +657,20 @@ export function Scenes() {
         </Card>
       )}
 
-      {!isEditing &&
-        scenes.map((scene) => (
-          <SceneRow
-            key={scene.id}
-            scene={scene}
-            isActive={activeSceneId === scene.id}
-            onActivate={() => handleActivate(scene.id)}
-            onEdit={() => startEdit(scene)}
-            onDelete={() => handleDelete(scene.id)}
-          />
-        ))}
+      {!isEditing && scenes.length > 0 && (
+        <div className="space-y-2">
+          {scenes.map((scene) => (
+            <SceneRow
+              key={scene.id}
+              scene={scene}
+              isActive={activeSceneId === scene.id}
+              onActivate={() => handleActivate(scene.id)}
+              onEdit={() => startEdit(scene)}
+              onDelete={() => handleDelete(scene.id)}
+            />
+          ))}
+        </div>
+      )}
     </div>
   );
 }

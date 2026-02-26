@@ -11,6 +11,8 @@ import {
   DiscoverLights,
   GetActiveScene,
   GetScene,
+  RemoveDevice,
+  SetDeviceRoom,
 } from "../../wailsjs/go/main/App";
 import { lights } from "../../wailsjs/go/models";
 
@@ -371,6 +373,48 @@ function setActiveSceneOptimistic(scene: Scene) {
   }
 }
 
+async function setDeviceRoom(deviceId: string, room: string) {
+  state = {
+    ...state,
+    devices: state.devices.map((d) =>
+      d.id === deviceId ? { ...d, room: room || undefined } : d
+    ),
+  };
+  emit();
+  try {
+    await SetDeviceRoom(deviceId, room);
+  } catch (e) {
+    console.error("Failed to set device room:", e);
+    await refreshDevices();
+  }
+}
+
+async function removeDevice(deviceId: string) {
+  const deviceOn = { ...state.deviceOn };
+  const brightness = { ...state.brightness };
+  const kelvin = { ...state.kelvin };
+  const color = { ...state.color };
+  delete deviceOn[deviceId];
+  delete brightness[deviceId];
+  delete kelvin[deviceId];
+  delete color[deviceId];
+  state = {
+    ...state,
+    devices: state.devices.filter((d) => d.id !== deviceId),
+    deviceOn,
+    brightness,
+    kelvin,
+    color,
+  };
+  emit();
+  try {
+    await RemoveDevice(deviceId);
+  } catch (e) {
+    console.error("Failed to remove device:", e);
+    await refreshDevices();
+  }
+}
+
 export const lightActions = {
   refreshDevices,
   discoverLights,
@@ -379,6 +423,8 @@ export const lightActions = {
   setKelvin,
   setTemperature,
   setColor,
+  setDeviceRoom,
+  removeDevice,
   applySceneStates,
   setActiveSceneOptimistic,
   previewSceneStates,

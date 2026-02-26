@@ -32,6 +32,8 @@ type Device struct {
 	KelvinStep int `json:"kelvinStep,omitempty"`
 	// FirmwareVersion is the device's reported software/firmware version string.
 	FirmwareVersion string `json:"firmwareVersion,omitempty"`
+	// Room is the user-assigned room label for grouping (e.g. "Bedroom", "Office").
+	Room string `json:"room,omitempty"`
 }
 
 type DeviceState struct {

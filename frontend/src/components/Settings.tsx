@@ -1,10 +1,10 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { Info, Plus, Search, Loader2, Wifi } from "lucide-react";
+import { Info, Plus, Search, Loader2, Wifi, Rss, CheckCircle2, X, Lightbulb, Trash2 } from "lucide-react";
 import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { Toggle } from "@/components/ui/Toggle";
 import { Slider } from "@/components/ui/Slider";
-import type { Settings as SettingsType } from "@/lib/types";
+import type { Settings as SettingsType, Device } from "@/lib/types";
 import { APP_VERSION } from "@/lib/types";
 import { store } from "../../wailsjs/go/models";
 import {
@@ -13,7 +13,17 @@ import {
   GetHueBridges,
   DiscoverHueBridges,
   PairHueBridge,
+  RemoveHueBridge,
 } from "../../wailsjs/go/main/App";
+import { lightActions } from "@/hooks/useLightStore";
+import { getBrandInfo } from "@/lib/brands";
+import { EventsOn } from "../../wailsjs/runtime/runtime";
+
+interface ScanProgress {
+  phase: string;
+  message: string;
+  devices?: Device[];
+}
 
 interface HueBridgeInfo {
   id: string;
@@ -37,6 +47,55 @@ export function Settings() {
   const [bridges, setBridges] = useState<HueBridgeInfo[]>([]);
   const isInitialLoad = useRef(true);
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Light discovery state
+  const [scanning, setScanning] = useState(false);
+  const [showScanCard, setShowScanCard] = useState(false);
+  const [scanMessage, setScanMessage] = useState("");
+  const [scanPhase, setScanPhase] = useState("");
+  const [foundDevices, setFoundDevices] = useState<Device[]>([]);
+  const scanCleanupRef = useRef<(() => void) | null>(null);
+
+  const dismissScan = useCallback(() => {
+    setShowScanCard(false);
+    setScanMessage("");
+    setScanPhase("");
+    setFoundDevices([]);
+  }, []);
+
+  const handleLightScan = useCallback(async () => {
+    setScanning(true);
+    setShowScanCard(true);
+    setScanMessage("Starting network scan...");
+    setScanPhase("");
+    setFoundDevices([]);
+
+    scanCleanupRef.current = EventsOn("scan:progress", (progress: ScanProgress) => {
+      setScanMessage(progress.message);
+      setScanPhase(progress.phase);
+      if (progress.devices && progress.devices.length > 0) {
+        setFoundDevices((prev) => {
+          const existingIds = new Set(prev.map((d) => d.id));
+          const incoming = progress.devices!.filter((d) => !existingIds.has(d.id));
+          return incoming.length > 0 ? [...prev, ...incoming] : prev;
+        });
+      }
+    });
+
+    try {
+      await lightActions.discoverLights();
+    } catch (e) {
+      console.error("Discovery failed:", e);
+    }
+
+    scanCleanupRef.current?.();
+    scanCleanupRef.current = null;
+    setScanning(false);
+  }, []);
+
+  useEffect(() => {
+    return () => { if (scanCleanupRef.current) scanCleanupRef.current(); };
+  }, []);
 
   const [step, setStep] = useState<AddBridgeStep>("idle");
   const [discovered, setDiscovered] = useState<DiscoveredBridge[]>([]);
@@ -139,6 +198,15 @@ export function Settings() {
     (ip: string) => bridges.some((b) => b.ip === ip),
     [bridges],
   );
+
+  const handleRemoveBridge = useCallback(async (id: string) => {
+    try {
+      await RemoveHueBridge(id);
+      setBridges((prev) => prev.filter((b) => b.id !== id));
+    } catch (e) {
+      console.error("Failed to remove bridge:", e);
+    }
+  }, []);
 
   return (
     <div className="space-y-8">
@@ -309,19 +377,94 @@ export function Settings() {
         {bridges.map((bridge) => (
           <div
             key={bridge.id || bridge.ip}
-            className="flex items-center justify-between rounded-lg p-3"
+            className="flex items-start justify-between rounded-lg border border-border p-3 group gap-3"
           >
-            <div className="flex items-center gap-3">
-              <Wifi className="h-4 w-4 text-muted-foreground" />
-              <div>
+            <div className="flex items-start gap-3 min-w-0">
+              <Wifi className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
+              <div className="space-y-1 min-w-0">
                 <p className="text-sm font-medium">{bridge.ip}</p>
-                <p className="text-xs text-muted-foreground">
-                  Key: {bridge.username.slice(0, 8)}...
-                </p>
+                <div className="space-y-0.5">
+                  <p className="text-xs text-muted-foreground">
+                    <span className="font-medium text-foreground/60">ID</span>{" "}
+                    <span className="font-mono break-all">{bridge.id}</span>
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    <span className="font-medium text-foreground/60">Key</span>{" "}
+                    <span className="font-mono break-all">{bridge.username}</span>
+                  </p>
+                </div>
               </div>
             </div>
+            <button
+              type="button"
+              title="Remove bridge"
+              onClick={() => handleRemoveBridge(bridge.id)}
+              className="h-7 w-7 shrink-0 rounded-md flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive hover:bg-destructive/10 focus:outline-none focus:opacity-100"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+            </button>
           </div>
         ))}
+      </Card>
+
+      <Card className="space-y-4">
+        <div className="flex items-center justify-between">
+          <h3 className="text-lg font-semibold">Discover Lights</h3>
+          <Button onClick={handleLightScan} disabled={scanning}>
+            {scanning ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Rss className="h-4 w-4" />
+            )}
+            {scanning ? "Scanning…" : "Scan Network"}
+          </Button>
+        </div>
+        <p className="text-sm text-muted-foreground">
+          Scan your local network to find LIFX, Hue, Elgato, and Govee lights.
+        </p>
+
+        {showScanCard && (
+          <div className="rounded-lg bg-background/50 border border-border p-4 space-y-3">
+            <div className="flex items-center gap-3">
+              {scanPhase === "done" ? (
+                <CheckCircle2 className="h-5 w-5 text-green-500 shrink-0" />
+              ) : (
+                <Loader2 className="h-5 w-5 animate-spin text-primary shrink-0" />
+              )}
+              <p className="text-sm font-medium flex-1">{scanMessage}</p>
+              {!scanning && (
+                <button
+                  type="button"
+                  onClick={dismissScan}
+                  className="text-muted-foreground hover:text-foreground transition-colors"
+                  aria-label="Dismiss"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              )}
+            </div>
+            {foundDevices.length > 0 && (
+              <div className="space-y-1.5 pt-1">
+                <p className="text-xs text-muted-foreground font-medium">
+                  Discovered lights
+                </p>
+                {foundDevices.map((d) => {
+                  const info = getBrandInfo(d.brand);
+                  return (
+                    <div
+                      key={d.id}
+                      className="flex items-center gap-2 text-sm animate-in fade-in slide-in-from-left-2 duration-300"
+                    >
+                      <Lightbulb className={`h-3.5 w-3.5 shrink-0 ${info.color}`} />
+                      <span>{d.name}</span>
+                      <span className="text-xs text-muted-foreground">{info.label}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
       </Card>
 
       <Card>

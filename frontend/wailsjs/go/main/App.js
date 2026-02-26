@@ -70,6 +70,18 @@ export function PairHueBridge(arg1) {
   return window['go']['main']['App']['PairHueBridge'](arg1);
 }
 
+export function RemoveDevice(arg1) {
+  return window['go']['main']['App']['RemoveDevice'](arg1);
+}
+
+export function RemoveHueBridge(arg1) {
+  return window['go']['main']['App']['RemoveHueBridge'](arg1);
+}
+
+export function SetDeviceRoom(arg1, arg2) {
+  return window['go']['main']['App']['SetDeviceRoom'](arg1, arg2);
+}
+
 export function SetLightState(arg1, arg2) {
   return window['go']['main']['App']['SetLightState'](arg1, arg2);
 }
