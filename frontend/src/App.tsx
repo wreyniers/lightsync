@@ -4,25 +4,19 @@ import { Lights } from "@/components/Lights";
 import { Scenes } from "@/components/Scenes";
 import { Settings } from "@/components/Settings";
 
-function App() {
-  const [currentPage, setCurrentPage] = useState("lights");
+const PAGES = {
+  lights: Lights,
+  scenes: Scenes,
+  settings: Settings,
+} as const;
 
-  const renderPage = () => {
-    switch (currentPage) {
-      case "lights":
-        return <Lights />;
-      case "scenes":
-        return <Scenes />;
-      case "settings":
-        return <Settings />;
-      default:
-        return <Lights />;
-    }
-  };
+function App() {
+  const [currentPage, setCurrentPage] = useState<keyof typeof PAGES>("lights");
+  const Page = PAGES[currentPage] ?? Lights;
 
   return (
-    <Layout currentPage={currentPage} onNavigate={setCurrentPage}>
-      {renderPage()}
+    <Layout currentPage={currentPage} onNavigate={(p) => setCurrentPage(p as keyof typeof PAGES)}>
+      <Page />
     </Layout>
   );
 }

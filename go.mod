@@ -63,5 +63,3 @@ require (
 	golang.org/x/tools v0.41.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
-
-// replace github.com/wailsapp/wails/v2 v2.11.0 => C:\Users\Wouter Reyniers\go\pkg\mod

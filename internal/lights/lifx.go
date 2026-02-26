@@ -119,25 +119,6 @@ func (c *LIFXController) Discover(ctx context.Context) ([]Device, error) {
 	return result, nil
 }
 
-func (c *LIFXController) Connect(ctx context.Context, deviceID string) error {
-	c.mu.RLock()
-	_, ok := c.lights[deviceID]
-	c.mu.RUnlock()
-	if ok {
-		return nil
-	}
-	devices, err := c.Discover(ctx)
-	if err != nil {
-		return err
-	}
-	for _, d := range devices {
-		if d.ID == deviceID {
-			return nil
-		}
-	}
-	return fmt.Errorf("device %s not found", deviceID)
-}
-
 func (c *LIFXController) SetState(ctx context.Context, deviceID string, state DeviceState) error {
 	ld, err := c.getLight(ctx, deviceID)
 	if err != nil {

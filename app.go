@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 
 	"lightsync/internal/discovery"
@@ -237,6 +238,7 @@ func (a *App) AddHueBridge(ip, username string) error {
 	}
 	bridges := a.store.GetHueBridges()
 	bridges = append(bridges, store.HueBridge{
+		ID:       uuid.New().String(),
 		IP:       ip,
 		Username: username,
 	})

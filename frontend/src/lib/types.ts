@@ -48,14 +48,3 @@ export interface Settings {
   startMinimized: boolean;
   launchAtLogin: boolean;
 }
-
-export interface DiscoverResult {
-  devices: Device[];
-  errors?: string[];
-}
-
-export interface CreateSceneRequest {
-  name: string;
-  trigger: string;
-  devices: Record<string, DeviceState>;
-}

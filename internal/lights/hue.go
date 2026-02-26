@@ -185,17 +185,6 @@ func (c *HueController) Discover(ctx context.Context) ([]Device, error) {
 	return result, nil
 }
 
-func (c *HueController) Connect(ctx context.Context, deviceID string) error {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	for _, conn := range c.bridges {
-		if _, ok := conn.devices[deviceID]; ok {
-			return nil
-		}
-	}
-	return fmt.Errorf("device %s not found, run discovery first", deviceID)
-}
-
 func (c *HueController) findDevice(deviceID string) (*hueConnection, hueDeviceInfo, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()

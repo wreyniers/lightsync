@@ -14,7 +14,7 @@ import { LightCard } from "@/components/ui/LightCard";
 import { useLightStore, lightActions } from "@/hooks/useLightStore";
 import { getBrandInfo, groupByBrand } from "@/lib/brands";
 import type { Device, LightMode } from "@/lib/types";
-import { EventsOn, EventsOff } from "../../wailsjs/runtime/runtime";
+import { EventsOn } from "../../wailsjs/runtime/runtime";
 
 interface ScanProgress {
   phase: string;
@@ -82,11 +82,8 @@ export function Lights() {
       console.error("Discovery failed:", e);
     }
 
-    if (cleanupRef.current) {
-      cleanupRef.current();
-      cleanupRef.current = null;
-    }
-    EventsOff("scan:progress");
+    cleanupRef.current?.();
+    cleanupRef.current = null;
     setScanning(false);
   }, []);
 

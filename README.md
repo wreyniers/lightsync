@@ -227,8 +227,7 @@ lightsync/
 │       │   ├── Settings.tsx   # App preferences, Hue pairing
 │       │   └── ui/            # Reusable UI primitives (ColorPanel, ColorPicker, LightCard, etc.)
 │       ├── hooks/
-│       │   ├── useLightStore.ts  # External store with optimistic updates
-│       │   └── useWails.ts       # Wails event subscription helper
+│       │   └── useLightStore.ts  # External store with optimistic updates
 │       └── lib/
 │           ├── types.ts       # TypeScript type definitions
 │           └── utils.ts       # Color conversion, Kelvin → CSS

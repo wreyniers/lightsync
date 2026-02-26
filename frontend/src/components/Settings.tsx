@@ -305,9 +305,9 @@ export function Settings() {
           </p>
         )}
 
-        {bridges.map((bridge, i) => (
+        {bridges.map((bridge) => (
           <div
-            key={i}
+            key={bridge.id || bridge.ip}
             className="flex items-center justify-between rounded-lg p-3"
           >
             <div className="flex items-center gap-3">

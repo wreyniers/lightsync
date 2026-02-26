@@ -94,11 +94,6 @@ func (c *ElgatoController) AddDevice(addr string) {
 	log.Printf("[elgato] Device %s registered successfully", deviceID)
 }
 
-func (c *ElgatoController) Connect(ctx context.Context, deviceID string) error {
-	_, err := c.getClient(deviceID)
-	return err
-}
-
 func (c *ElgatoController) SetState(ctx context.Context, deviceID string, state DeviceState) error {
 	client, err := c.getClient(deviceID)
 	if err != nil {

@@ -404,7 +404,7 @@ export function useLightStore(): LightStoreState {
 }
 
 // When scene:active fires, apply preset states AND active scene in one atomic update.
-// Layout reads both from the store, so no race and no second source (useWailsEvent).
+// Layout reads both from the store, so no race and no second source.
 function setupSceneActiveListener() {
   try {
     EventsOn("scene:active", (payload: unknown) => {

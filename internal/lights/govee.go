@@ -74,16 +74,6 @@ func (c *GoveeController) Discover(ctx context.Context) ([]Device, error) {
 	return result, nil
 }
 
-func (c *GoveeController) Connect(ctx context.Context, deviceID string) error {
-	c.mu.RLock()
-	_, ok := c.deviceMap[deviceID]
-	c.mu.RUnlock()
-	if ok {
-		return nil
-	}
-	return fmt.Errorf("device %s not found, run discovery first", deviceID)
-}
-
 func (c *GoveeController) SetState(ctx context.Context, deviceID string, state DeviceState) error {
 	c.mu.RLock()
 	dev, ok := c.deviceMap[deviceID]

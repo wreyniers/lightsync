@@ -431,12 +431,12 @@ On success, the bridge is automatically registered via `AddHueBridge`.
 
 ## Events Reference
 
-The backend emits these Wails events. Subscribe in the frontend using `runtime.EventsOn` (or the `useWails` hook):
+The backend emits these Wails events. Subscribe in the frontend using `runtime.EventsOn`:
 
 ```typescript
-import { EventsOn } from "@wailsapp/runtime"
+import { EventsOn } from "../../wailsjs/runtime/runtime";
 
-EventsOn("camera:state", (cameraOn: boolean) => { ... })
+EventsOn("camera:state", (cameraOn: boolean) => { ... });
 ```
 
 | Event | Payload | Description |
