@@ -8,6 +8,7 @@ import {
   Camera,
   CameraOff,
 } from "lucide-react";
+import { APP_VERSION } from "@/lib/types";
 import { useLightStore, lightActions } from "@/hooks/useLightStore";
 import { Toggle } from "@/components/ui/Toggle";
 import {
@@ -50,7 +51,7 @@ export function Layout({ children, currentPage, onNavigate }: LayoutProps) {
   }, []);
 
   // Single source of truth: store holds activeScene + device states atomically.
-  const activeScene = lightStore.activeScene ?? null;
+  const activeScene = lightStore.activeScene;
 
   // Detect whether live light state has drifted from the active scene's preset.
   // Checks color/kelvin mode and value — brightness drift is intentionally ignored
@@ -74,7 +75,7 @@ export function Layout({ children, currentPage, onNavigate }: LayoutProps) {
       }
     }
     return false;
-  }, [activeScene, lightStore]);
+  }, [activeScene, lightStore.color, lightStore.kelvin]);
 
   // Color swatches: when deviated show live light colors, otherwise scene colors.
   const sceneSwatch = useMemo(
@@ -90,7 +91,7 @@ export function Layout({ children, currentPage, onNavigate }: LayoutProps) {
         lightStore.color,
         lightStore.kelvin
       ),
-    [lightStore]
+    [lightStore.devices, lightStore.deviceOn, lightStore.color, lightStore.kelvin]
   );
 
   const displaySwatch = deviated ? liveSwatch : sceneSwatch;
@@ -204,7 +205,7 @@ export function Layout({ children, currentPage, onNavigate }: LayoutProps) {
 
         <div className="p-4">
           <p className="text-xs text-muted-foreground text-center">
-            LightSync v1.0.0
+            LightSync v{APP_VERSION}
           </p>
         </div>
       </aside>

@@ -1,8 +1,23 @@
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
+import type { LightMode, Color } from "@/lib/types";
+import { DEFAULT_KELVIN } from "@/lib/types";
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
+}
+
+/** Determine which mode (color / kelvin) a device should display. */
+export function resolveMode(
+  deviceId: string,
+  overrides: Record<string, LightMode>,
+  color: Record<string, { h: number; s: number; b: number }>,
+  kelvin: Record<string, number>
+): LightMode {
+  if (overrides[deviceId]) return overrides[deviceId];
+  if (color[deviceId]) return "color";
+  if (kelvin[deviceId]) return "kelvin";
+  return "color";
 }
 
 function hsbToRGB(h: number, s: number, b: number): [number, number, number] {
@@ -70,7 +85,7 @@ export function hueToKelvin(hue: number): number {
   const Z = 0.0193339 * rl + 0.1191920 * gl + 0.9503041 * bl;
 
   const sum = X + Y + Z;
-  if (sum < 1e-6) return 4000;
+  if (sum < 1e-6) return DEFAULT_KELVIN;
 
   const xc = X / sum;
   const yc = Y / sum;

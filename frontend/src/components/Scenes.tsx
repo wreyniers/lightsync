@@ -16,7 +16,8 @@ import { Badge } from "@/components/ui/Badge";
 import { LightCard } from "@/components/ui/LightCard";
 import { ColorWheel, KelvinSlider } from "@/components/ui/ColorPanel";
 import { SegmentedControl } from "@/components/ui/SegmentedControl";
-import type { Device, DeviceState, Color } from "@/lib/types";
+import type { Device, DeviceState, Color, LightMode } from "@/lib/types";
+import { DEFAULT_KELVIN } from "@/lib/types";
 import { hueToKelvin, kelvinToHSB } from "@/lib/utils";
 import { getBrandInfo, groupByBrand } from "@/lib/brands";
 import { sceneSwatchBackground } from "@/lib/sceneColors";
@@ -32,7 +33,6 @@ import {
 } from "../../wailsjs/go/main/App";
 
 type Scene = store.Scene;
-type LightMode = "color" | "kelvin";
 
 const DEFAULT_COLOR: Color = { h: 30, s: 1, b: 1 };
 type GlobalMode = "none" | "color" | "kelvin";
@@ -73,7 +73,7 @@ export function Scenes() {
   // Global override — one mode at a time; brightness stays per-device.
   const [globalMode, setGlobalMode] = useState<GlobalMode>("none");
   const [globalColorValue, setGlobalColorValue] = useState<Color>(DEFAULT_COLOR);
-  const [globalKelvin, setGlobalKelvin] = useState(4000);
+  const [globalKelvin, setGlobalKelvin] = useState(DEFAULT_KELVIN);
 
   // True when the editor has unsaved changes relative to the saved scene.
   // Always true when creating (nothing to compare against).
@@ -120,7 +120,7 @@ export function Scenes() {
     setDeviceModes({});
     setGlobalMode("none");
     setGlobalColorValue(DEFAULT_COLOR);
-    setGlobalKelvin(4000);
+    setGlobalKelvin(DEFAULT_KELVIN);
     setEditing(null);
     setPreEditLightStates({});
   };
@@ -138,7 +138,7 @@ export function Scenes() {
     if (scene.globalColor) {
       setGlobalMode("color");
       setGlobalColorValue(scene.globalColor);
-      setGlobalKelvin(4000);
+      setGlobalKelvin(DEFAULT_KELVIN);
     } else if (scene.globalKelvin != null) {
       setGlobalMode("kelvin");
       setGlobalKelvin(scene.globalKelvin);
@@ -146,7 +146,7 @@ export function Scenes() {
     } else {
       setGlobalMode("none");
       setGlobalColorValue(DEFAULT_COLOR);
-      setGlobalKelvin(4000);
+      setGlobalKelvin(DEFAULT_KELVIN);
     }
 
     // Capture current light states to restore on exit. Editing never activates the scene.
@@ -553,7 +553,7 @@ export function Scenes() {
                               : devState?.color;
                             const displayKelvin =
                               derivedKelvin ??
-                              (globalMode === "kelvin" ? globalKelvin : (devState?.kelvin ?? 4000));
+                              (globalMode === "kelvin" ? globalKelvin : (devState?.kelvin ?? DEFAULT_KELVIN));
                             const displayMode: LightMode =
                               globalMode === "color" && isKelvinOnly ? "kelvin"
                               : globalMode === "color" ? "color"

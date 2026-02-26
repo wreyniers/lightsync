@@ -15,12 +15,15 @@ type Monitor struct {
 	active   bool
 	onChange StateChangeHandler
 	enabled  bool
+
+	resetCh chan struct{}
 }
 
 func NewMonitor(interval time.Duration) *Monitor {
 	return &Monitor{
 		interval: interval,
 		enabled:  true,
+		resetCh:  make(chan struct{}, 1),
 	}
 }
 
@@ -50,21 +53,36 @@ func (m *Monitor) IsActive() bool {
 
 func (m *Monitor) SetInterval(d time.Duration) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	m.interval = d
+	m.mu.Unlock()
+
+	select {
+	case m.resetCh <- struct{}{}:
+	default:
+	}
 }
 
 func (m *Monitor) Start(ctx context.Context) {
-	ticker := time.NewTicker(m.interval)
+	m.mu.RLock()
+	interval := m.interval
+	m.mu.RUnlock()
+
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
-	log.Printf("[webcam] Monitor started (interval: %v)", m.interval)
+	log.Printf("[webcam] Monitor started (interval: %v)", interval)
 
 	for {
 		select {
 		case <-ctx.Done():
 			log.Println("[webcam] Monitor stopped")
 			return
+		case <-m.resetCh:
+			m.mu.RLock()
+			newInterval := m.interval
+			m.mu.RUnlock()
+			ticker.Reset(newInterval)
+			log.Printf("[webcam] Monitor interval updated to %v", newInterval)
 		case <-ticker.C:
 			m.mu.RLock()
 			enabled := m.enabled

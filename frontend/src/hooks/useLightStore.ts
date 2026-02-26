@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from "react";
 import { EventsOn } from "../../wailsjs/runtime/runtime";
 import type { Device, DeviceState, Color, Scene } from "@/lib/types";
+import { DEFAULT_KELVIN } from "@/lib/types";
 import {
   GetDevices,
   GetLightState,
@@ -189,7 +190,7 @@ async function setBrightness(deviceId: string, value: number) {
     const s = new lights.DeviceState({
       on: true,
       brightness: value / 100,
-      kelvin: state.kelvin[deviceId] || 4000,
+      kelvin: state.kelvin[deviceId] || DEFAULT_KELVIN,
     });
     try {
       await SetLightState(deviceId, s);
@@ -307,26 +308,31 @@ function setActiveSceneWithStates(scene: Scene, sceneDevices: Record<string, Dev
   emit();
 }
 
+function buildDeviceCommand(ds: DeviceState): InstanceType<typeof lights.DeviceState> {
+  const brightness =
+    typeof ds.brightness === "number" && ds.brightness <= 1
+      ? ds.brightness
+      : (ds.brightness ?? 80) / 100;
+  return new lights.DeviceState({
+    on: ds.on,
+    brightness,
+    kelvin: ds.kelvin ?? DEFAULT_KELVIN,
+    color: ds.color ? new lights.Color(ds.color) : undefined,
+  });
+}
+
+async function sendToDevices(deviceStates: Record<string, DeviceState>) {
+  await Promise.allSettled(
+    Object.entries(deviceStates).map(([id, ds]) =>
+      SetLightState(id, buildDeviceCommand(ds))
+    )
+  );
+}
+
 /** Apply scene states to store and hardware for live preview. Does not activate the scene. */
 async function previewSceneStates(sceneDevices: Record<string, DeviceState>) {
   applySceneStates(sceneDevices);
-  for (const [id, ds] of Object.entries(sceneDevices)) {
-    const brightness =
-      typeof ds.brightness === "number" && ds.brightness <= 1
-        ? ds.brightness
-        : (ds.brightness ?? 80) / 100;
-    const s = new lights.DeviceState({
-      on: ds.on,
-      brightness,
-      kelvin: ds.kelvin ?? 4000,
-      color: ds.color ? new lights.Color(ds.color) : undefined,
-    });
-    try {
-      await SetLightState(id, s);
-    } catch (e) {
-      console.error("Failed to preview scene state:", id, e);
-    }
-  }
+  await sendToDevices(sceneDevices);
 }
 
 /** Restore lights to a prior state. Updates the store and sends commands to hardware. */
@@ -335,26 +341,8 @@ async function restoreLightStates(
   deviceList: Device[]
 ) {
   applySceneStates(states);
+  await sendToDevices(states);
   const ids = Object.keys(states);
-  for (const id of ids) {
-    const ds = states[id];
-    if (!ds) continue;
-    const brightness =
-      typeof ds.brightness === "number" && ds.brightness <= 1
-        ? ds.brightness
-        : (ds.brightness ?? 80) / 100;
-    const s = new lights.DeviceState({
-      on: ds.on,
-      brightness,
-      kelvin: ds.kelvin ?? 4000,
-      color: ds.color ? new lights.Color(ds.color) : undefined,
-    });
-    try {
-      await SetLightState(id, s);
-    } catch (e) {
-      console.error("Failed to restore light state:", id, e);
-    }
-  }
   await fetchLightStates(deviceList.filter((d) => ids.includes(d.id)));
 }
 

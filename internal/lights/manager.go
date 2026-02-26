@@ -35,10 +35,6 @@ func (m *Manager) GetController(brand Brand) (Controller, bool) {
 	return c, ok
 }
 
-func (m *Manager) DiscoverAll(ctx context.Context) ([]Device, error) {
-	return m.DiscoverAllWithProgress(ctx, nil)
-}
-
 // DiscoverAllWithProgress runs discovery across all controllers concurrently.
 // onDevices is called (under an internal lock, so serially) each time a
 // controller finishes, with only the devices that controller returned.
@@ -90,55 +86,48 @@ func (m *Manager) DiscoverAllWithProgress(ctx context.Context, onDevices func([]
 	return allDevices, nil
 }
 
-func (m *Manager) SetDeviceState(ctx context.Context, deviceID string, state DeviceState) error {
+func (m *Manager) controllerFor(deviceID string) (Controller, error) {
 	brand := brandFromDeviceID(deviceID)
 	ctrl, ok := m.GetController(brand)
 	if !ok {
-		return fmt.Errorf("no controller for brand %q", brand)
+		return nil, fmt.Errorf("no controller for brand %q", brand)
 	}
-	log.Printf("[manager] SetDeviceState %s: on=%v brightness=%.2f", deviceID, state.On, state.Brightness)
-	if err := ctrl.SetState(ctx, deviceID, state); err != nil {
-		log.Printf("[manager] SetDeviceState %s failed: %v", deviceID, err)
+	return ctrl, nil
+}
+
+func (m *Manager) SetDeviceState(ctx context.Context, deviceID string, state DeviceState) error {
+	ctrl, err := m.controllerFor(deviceID)
+	if err != nil {
 		return err
 	}
-	return nil
+	log.Printf("[manager] SetDeviceState %s: on=%v brightness=%.2f", deviceID, state.On, state.Brightness)
+	return ctrl.SetState(ctx, deviceID, state)
 }
 
 func (m *Manager) GetDeviceState(ctx context.Context, deviceID string) (DeviceState, error) {
-	brand := brandFromDeviceID(deviceID)
-	ctrl, ok := m.GetController(brand)
-	if !ok {
-		return DeviceState{}, fmt.Errorf("no controller for brand %q", brand)
+	ctrl, err := m.controllerFor(deviceID)
+	if err != nil {
+		return DeviceState{}, err
 	}
 	return ctrl.GetState(ctx, deviceID)
 }
 
 func (m *Manager) TurnOn(ctx context.Context, deviceID string) error {
-	brand := brandFromDeviceID(deviceID)
-	ctrl, ok := m.GetController(brand)
-	if !ok {
-		return fmt.Errorf("no controller for brand %q", brand)
-	}
-	log.Printf("[manager] TurnOn %s", deviceID)
-	if err := ctrl.TurnOn(ctx, deviceID); err != nil {
-		log.Printf("[manager] TurnOn %s failed: %v", deviceID, err)
+	ctrl, err := m.controllerFor(deviceID)
+	if err != nil {
 		return err
 	}
-	return nil
+	log.Printf("[manager] TurnOn %s", deviceID)
+	return ctrl.TurnOn(ctx, deviceID)
 }
 
 func (m *Manager) TurnOff(ctx context.Context, deviceID string) error {
-	brand := brandFromDeviceID(deviceID)
-	ctrl, ok := m.GetController(brand)
-	if !ok {
-		return fmt.Errorf("no controller for brand %q", brand)
-	}
-	log.Printf("[manager] TurnOff %s", deviceID)
-	if err := ctrl.TurnOff(ctx, deviceID); err != nil {
-		log.Printf("[manager] TurnOff %s failed: %v", deviceID, err)
+	ctrl, err := m.controllerFor(deviceID)
+	if err != nil {
 		return err
 	}
-	return nil
+	log.Printf("[manager] TurnOff %s", deviceID)
+	return ctrl.TurnOff(ctx, deviceID)
 }
 
 func (m *Manager) GetDevices() []Device {

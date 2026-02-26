@@ -1,5 +1,5 @@
 import { hsbToCSS, kelvinToCSS, swatchBackground } from "@/lib/utils";
-import type { Color, Device, DeviceState, Scene } from "@/lib/types";
+import type { Color, Device, Scene } from "@/lib/types";
 
 /** Extract unique CSS color strings from a scene (global or per-device). */
 export function sceneColors(scene: Scene): string[] {

@@ -32,6 +32,9 @@ export interface Color {
 
 export type LightMode = "color" | "kelvin";
 
+export const DEFAULT_KELVIN = 4000;
+export const APP_VERSION = "1.0.0";
+
 export interface Scene {
   id: string;
   name: string;

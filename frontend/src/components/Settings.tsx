@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/Button";
 import { Toggle } from "@/components/ui/Toggle";
 import { Slider } from "@/components/ui/Slider";
 import type { Settings as SettingsType } from "@/lib/types";
+import { APP_VERSION } from "@/lib/types";
 import { store } from "../../wailsjs/go/models";
 import {
   GetSettings,
@@ -331,7 +332,7 @@ export function Settings() {
         <div className="space-y-2 text-sm text-muted-foreground">
           <p>
             <span className="text-foreground font-medium">LightSync</span>{" "}
-            v1.0.0
+            v{APP_VERSION}
           </p>
           <p>
             Monitors your webcam and automatically controls your smart lights.

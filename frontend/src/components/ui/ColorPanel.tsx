@@ -24,15 +24,12 @@ export function ColorWheel({ color, brightness, onChange }: ColorWheelProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const pickerRef = useRef<IroPicker | null>(null);
   const suppressRef = useRef(false);
-  // Track current brightness in a ref so the mount-time handler always sends
-  // the latest value without needing to re-initialise iro.
   const brightnessRef = useRef(brightness);
+  const onChangeRef = useRef(onChange);
 
-  useEffect(() => {
-    brightnessRef.current = brightness;
-  }, [brightness]);
+  useEffect(() => { brightnessRef.current = brightness; }, [brightness]);
+  useEffect(() => { onChangeRef.current = onChange; }, [onChange]);
 
-  // Initialise iro once on mount (component is only rendered when mode = color).
   useEffect(() => {
     if (!containerRef.current) return;
 
@@ -51,7 +48,7 @@ export function ColorWheel({ color, brightness, onChange }: ColorWheelProps) {
     const handleChange = (c: any) => {
       if (suppressRef.current) return;
       const { h, s } = c.hsv;
-      onChange({ h, s: s / 100, b: brightnessRef.current / 100 });
+      onChangeRef.current({ h, s: s / 100, b: brightnessRef.current / 100 });
     };
 
     picker.on("color:change", handleChange);
@@ -60,8 +57,6 @@ export function ColorWheel({ color, brightness, onChange }: ColorWheelProps) {
     return () => {
       picker.off("color:change", handleChange);
       pickerRef.current = null;
-      // Clear iro's appended DOM so a Strict Mode remount (or a future re-open)
-      // doesn't accumulate duplicate wheels/sliders in the same container.
       if (containerRef.current) containerRef.current.innerHTML = "";
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -95,8 +90,10 @@ export function KelvinSlider({ kelvin, device, onChange }: KelvinSliderProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const pickerRef = useRef<IroPicker | null>(null);
   const lastEmitted = useRef(kelvin);
+  const onChangeRef = useRef(onChange);
 
-  // Initialise iro once on mount (component is only rendered when mode = kelvin).
+  useEffect(() => { onChangeRef.current = onChange; }, [onChange]);
+
   useEffect(() => {
     if (!containerRef.current) return;
 
@@ -127,7 +124,7 @@ export function KelvinSlider({ kelvin, device, onChange }: KelvinSliderProps) {
       if (device?.minKelvin) k = Math.max(device.minKelvin, k);
       if (device?.maxKelvin) k = Math.min(device.maxKelvin, k);
       lastEmitted.current = k;
-      onChange(k);
+      onChangeRef.current(k);
     };
 
     picker.on("input:change", handleChange);

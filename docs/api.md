@@ -270,8 +270,6 @@ Permanently removes a scene by ID.
 function DeleteScene(id: string): Promise<void>
 ```
 
-If the deleted scene was active, the active scene ID is cleared and a `scene:active` event is emitted with an empty string.
-
 ---
 
 ### `ActivateScene`
@@ -356,13 +354,13 @@ function GetSettings(): Promise<Settings>
 
 ### `UpdateSettings`
 
-Saves new settings and immediately applies them (e.g. updating the webcam poll interval takes effect without a restart).
+Saves new settings and immediately applies the webcam poll interval (takes effect without a restart).
 
 ```typescript
 function UpdateSettings(settings: Settings): Promise<void>
 ```
 
-`pollIntervalMs` must be greater than 0. Values below 500 ms are rounded up to 500 ms internally.
+`pollIntervalMs` must be greater than 0. At startup, values below 500 ms are set to 1000 ms.
 
 ---
 
@@ -451,8 +449,7 @@ EventsOn("camera:state", (cameraOn: boolean) => { ... });
 ```typescript
 interface ScanProgress {
   phase:    string    // e.g. "elgato_mdns", "hue_ssdp", "lifx_udp"
-  total:    number    // total number of phases
-  current:  number    // 1-based index of the current phase
   message:  string    // human-readable description
+  devices?: Device[]  // devices found so far in this phase
 }
 ```

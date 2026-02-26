@@ -1,6 +1,9 @@
 package lights
 
-import "time"
+import (
+	"math"
+	"time"
+)
 
 type Brand string
 
@@ -10,6 +13,8 @@ const (
 	BrandElgato Brand = "elgato"
 	BrandGovee  Brand = "govee"
 )
+
+const DefaultKelvin = 4000
 
 type Device struct {
 	ID             string    `json:"id"`
@@ -48,6 +53,10 @@ func HSBToRGB(h, s, b float64) (r, g, bl uint8) {
 		return v, v, v
 	}
 
+	h = math.Mod(h, 360)
+	if h < 0 {
+		h += 360
+	}
 	hh := h / 60.0
 	i := int(hh)
 	ff := hh - float64(i)

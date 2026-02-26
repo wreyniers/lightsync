@@ -14,24 +14,14 @@ import { LightCard } from "@/components/ui/LightCard";
 import { useLightStore, lightActions } from "@/hooks/useLightStore";
 import { getBrandInfo, groupByBrand } from "@/lib/brands";
 import type { Device, LightMode } from "@/lib/types";
+import { DEFAULT_KELVIN } from "@/lib/types";
+import { resolveMode } from "@/lib/utils";
 import { EventsOn } from "../../wailsjs/runtime/runtime";
 
 interface ScanProgress {
   phase: string;
   message: string;
   devices?: Device[];
-}
-
-function resolveMode(
-  deviceId: string,
-  overrides: Record<string, LightMode>,
-  color: Record<string, { h: number; s: number; b: number }>,
-  kelvin: Record<string, number>
-): LightMode {
-  if (overrides[deviceId]) return overrides[deviceId];
-  if (color[deviceId]) return "color";
-  if (kelvin[deviceId]) return "kelvin";
-  return "color";
 }
 
 export function Lights() {
@@ -99,7 +89,7 @@ export function Lights() {
     if (newMode === "kelvin" && color[deviceId]) {
       lightActions.setTemperature(
         deviceId,
-        kelvin[deviceId] ?? 4000,
+        kelvin[deviceId] ?? DEFAULT_KELVIN,
         (brightness[deviceId] ?? 80) / 100
       );
     }
@@ -214,7 +204,7 @@ export function Lights() {
                     device={device}
                     on={deviceOn[device.id] ?? false}
                     brightness={brightness[device.id] ?? 0}
-                    kelvin={kelvin[device.id] ?? 4000}
+                    kelvin={kelvin[device.id] ?? DEFAULT_KELVIN}
                     color={color[device.id]}
                     mode={mode}
                     onToggle={(on) => lightActions.toggleLight(device.id, on)}

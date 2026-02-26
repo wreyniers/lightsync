@@ -527,7 +527,7 @@ The UI is designed for a specific layout. Disabling resize keeps the experience 
 Smart light HTTP APIs (especially Elgato) can take 200–800 ms to respond. Applying UI changes optimistically and debouncing writes gives a snappy feel without showing incorrect state when the server is slow.
 
 ### Controller interface for lights
-Each brand has different discovery mechanisms and wire protocols. The `Controller` interface hides this completely — the `Manager` only ever calls `Discover`, `SetState`, `TurnOn`, `TurnOff`, and `Close`. Adding a new brand is adding a new file that implements the interface.
+Each brand has different discovery mechanisms and wire protocols. The `Controller` interface hides this completely — the `Manager` only ever calls `Brand`, `Discover`, `SetState`, `GetState`, `TurnOn`, `TurnOff`, and `Close`. Adding a new brand is adding a new file that implements the interface.
 
 ### Polling (not push) for webcam state
 Most OS webcam APIs do not offer push notifications. Polling the registry/AVFoundation at a configurable interval (default 1 s) is the simplest reliable approach. The interval is tunable down to 250 ms for users who need faster reaction times.

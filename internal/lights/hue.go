@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"log"
+	"math"
 	"net/http"
 	"sync"
 	"time"
@@ -39,16 +40,23 @@ func NewHueController() *HueController {
 	}
 }
 
+// NewHueHTTPClient returns an HTTP client configured for Hue bridges
+// (self-signed TLS certificates, short timeout).
+func NewHueHTTPClient(timeout time.Duration) *http.Client {
+	return &http.Client{
+		Timeout: timeout,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		},
+	}
+}
+
 func (c *HueController) Brand() Brand {
 	return BrandHue
 }
 
 func (c *HueController) AddBridge(ip, username string) error {
-	httpClient := &http.Client{
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-		},
-	}
+	httpClient := NewHueHTTPClient(0)
 
 	apiURL := fmt.Sprintf("https://%s", ip)
 	client, err := openhue.NewClientWithResponses(
@@ -127,6 +135,7 @@ func (c *HueController) Discover(ctx context.Context) ([]Device, error) {
 			}
 		}
 
+		bridgeCount := 0
 		for _, l := range *resp.JSON200.Data {
 			if l.Id == nil {
 				continue
@@ -144,7 +153,6 @@ func (c *HueController) Discover(ctx context.Context) ([]Device, error) {
 			}
 			c.mu.Unlock()
 
-			// Derive Kelvin range from Mirek schema (1 000 000 / mirek = Kelvin).
 			var minKelvin, maxKelvin int
 			if l.ColorTemperature != nil && l.ColorTemperature.MirekSchema != nil {
 				if v := l.ColorTemperature.MirekSchema.MirekMaximum; v != nil && *v > 0 {
@@ -155,7 +163,6 @@ func (c *HueController) Discover(ctx context.Context) ([]Device, error) {
 				}
 			}
 
-			// Look up product model/firmware via the light's owning device.
 			var modelName, firmwareVersion string
 			if l.Owner != nil && l.Owner.Rid != nil {
 				if meta, ok := deviceMeta[*l.Owner.Rid]; ok {
@@ -178,8 +185,9 @@ func (c *HueController) Discover(ctx context.Context) ([]Device, error) {
 				KelvinStep:      1,
 				FirmwareVersion: firmwareVersion,
 			})
+			bridgeCount++
 		}
-		log.Printf("[hue] Bridge %s: found %d light(s)", conn.bridge.IP, len(result))
+		log.Printf("[hue] Bridge %s: found %d light(s)", conn.bridge.IP, bridgeCount)
 	}
 
 	return result, nil
@@ -271,8 +279,17 @@ func (c *HueController) GetState(ctx context.Context, deviceID string) (DeviceSt
 }
 
 func (c *HueController) TurnOn(ctx context.Context, deviceID string) error {
-	return c.SetState(ctx, deviceID, DeviceState{On: true, Brightness: 1.0})
+	conn, info, ok := c.findDevice(deviceID)
+	if !ok {
+		return fmt.Errorf("device %s not connected", deviceID)
+	}
+	on := openhue.On{On: boolPtr(true)}
+	body := openhue.UpdateLightJSONRequestBody{On: &on}
+	_, err := conn.client.UpdateLightWithResponse(ctx, info.lightID, body)
+	return err
 }
+
+func boolPtr(b bool) *bool { return &b }
 
 func (c *HueController) TurnOff(ctx context.Context, deviceID string) error {
 	return c.SetState(ctx, deviceID, DeviceState{On: false})
@@ -294,7 +311,7 @@ func kelvinToMirek(kelvin int) int {
 
 func mirekToKelvin(mirek int) int {
 	if mirek <= 0 {
-		return 4000
+		return DefaultKelvin
 	}
 	return 1000000 / mirek
 }
@@ -318,22 +335,7 @@ func hsbToXY(h, s, b float64) [2]float64 {
 
 func gammaCorrect(v float64) float64 {
 	if v > 0.04045 {
-		return pow((v+0.055)/1.055, 2.4)
+		return math.Pow((v+0.055)/1.055, 2.4)
 	}
 	return v / 12.92
-}
-
-func pow(base, exp float64) float64 {
-	if base <= 0 {
-		return 0
-	}
-	result := 1.0
-	for i := 0; i < int(exp); i++ {
-		result *= base
-	}
-	frac := exp - float64(int(exp))
-	if frac > 0 {
-		result *= (1.0 + frac*(base-1.0))
-	}
-	return result
 }

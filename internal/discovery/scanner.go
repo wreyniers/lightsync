@@ -2,7 +2,6 @@ package discovery
 
 import (
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -419,12 +418,7 @@ func discoverHueViaProbe(ctx context.Context, addBridge func(ip, name string)) {
 		return
 	}
 
-	client := &http.Client{
-		Timeout: 1 * time.Second,
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-		},
-	}
+	client := lights.NewHueHTTPClient(1 * time.Second)
 
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, 80)
@@ -451,6 +445,8 @@ func discoverHueViaProbe(ctx context.Context, addBridge func(ip, name string)) {
 	wg.Wait()
 }
 
+var httpPlainClient = &http.Client{Timeout: 1 * time.Second}
+
 func isHueBridge(ctx context.Context, httpsClient *http.Client, ip string) bool {
 	urls := []string{
 		fmt.Sprintf("http://%s/api/config", ip),
@@ -460,7 +456,7 @@ func isHueBridge(ctx context.Context, httpsClient *http.Client, ip string) bool 
 	for _, url := range urls {
 		client := httpsClient
 		if strings.HasPrefix(url, "http://") {
-			client = &http.Client{Timeout: 1 * time.Second}
+			client = httpPlainClient
 		}
 
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)

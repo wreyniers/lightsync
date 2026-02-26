@@ -85,9 +85,10 @@ func (c *LIFXController) Discover(ctx context.Context) ([]Device, error) {
 		}
 
 		deviceID := fmt.Sprintf("lifx:%s", target)
-		host, _, _ := net.SplitHostPort(raw.Target().String())
-		if host == "" {
-			host = target
+		var host string
+		if conn, dialErr := raw.Dial(); dialErr == nil {
+			host, _, _ = net.SplitHostPort(conn.RemoteAddr().String())
+			conn.Close()
 		}
 
 		c.mu.Lock()
@@ -119,45 +120,25 @@ func (c *LIFXController) Discover(ctx context.Context) ([]Device, error) {
 	return result, nil
 }
 
+const lifxTransition = 200 * time.Millisecond
+
 func (c *LIFXController) SetState(ctx context.Context, deviceID string, state DeviceState) error {
-	ld, err := c.getLight(ctx, deviceID)
+	ld, conn, err := c.dialWithRetry(ctx, deviceID)
 	if err != nil {
 		return err
-	}
-
-	conn, err := ld.Dial()
-	if err != nil {
-		log.Printf("[lifx] Dial failed for %s, re-discovering: %v", deviceID, err)
-		ld, err = c.rediscoverDevice(ctx, deviceID)
-		if err != nil {
-			return err
-		}
-		conn, err = ld.Dial()
-		if err != nil {
-			return fmt.Errorf("dial %s after re-discovery: %w", deviceID, err)
-		}
 	}
 	defer conn.Close()
 
 	if !state.On {
-		if err := ld.SetLightPower(ctx, conn, lifxlan.PowerOff, 200*time.Millisecond, false); err != nil {
-			log.Printf("[lifx] SetLightPower(off) failed for %s: %v", deviceID, err)
-			return err
-		}
-		return nil
+		return ld.SetLightPower(ctx, conn, lifxlan.PowerOff, lifxTransition, false)
 	}
 
-	if err := ld.SetLightPower(ctx, conn, lifxlan.PowerOn, 200*time.Millisecond, false); err != nil {
-		log.Printf("[lifx] SetLightPower(on) failed for %s: %v", deviceID, err)
+	if err := ld.SetLightPower(ctx, conn, lifxlan.PowerOn, lifxTransition, false); err != nil {
 		return err
 	}
 
 	color := stateToLIFXColor(state)
-	if err := ld.SetColor(ctx, conn, &color, 200*time.Millisecond, false); err != nil {
-		log.Printf("[lifx] SetColor failed for %s: %v", deviceID, err)
-		return err
-	}
-	return nil
+	return ld.SetColor(ctx, conn, &color, lifxTransition, false)
 }
 
 func (c *LIFXController) GetState(ctx context.Context, deviceID string) (DeviceState, error) {
@@ -194,9 +175,18 @@ func (c *LIFXController) TurnOff(ctx context.Context, deviceID string) error {
 }
 
 func (c *LIFXController) setPower(ctx context.Context, deviceID string, power lifxlan.Power) error {
-	ld, err := c.getLight(ctx, deviceID)
+	ld, conn, err := c.dialWithRetry(ctx, deviceID)
 	if err != nil {
 		return err
+	}
+	defer conn.Close()
+	return ld.SetLightPower(ctx, conn, power, lifxTransition, false)
+}
+
+func (c *LIFXController) dialWithRetry(ctx context.Context, deviceID string) (light.Device, net.Conn, error) {
+	ld, err := c.getLight(ctx, deviceID)
+	if err != nil {
+		return nil, nil, err
 	}
 
 	conn, err := ld.Dial()
@@ -204,21 +194,14 @@ func (c *LIFXController) setPower(ctx context.Context, deviceID string, power li
 		log.Printf("[lifx] Dial failed for %s, re-discovering: %v", deviceID, err)
 		ld, err = c.rediscoverDevice(ctx, deviceID)
 		if err != nil {
-			return err
+			return nil, nil, err
 		}
 		conn, err = ld.Dial()
 		if err != nil {
-			return fmt.Errorf("dial %s after re-discovery: %w", deviceID, err)
+			return nil, nil, fmt.Errorf("dial %s after re-discovery: %w", deviceID, err)
 		}
 	}
-	defer conn.Close()
-
-	if err := ld.SetLightPower(ctx, conn, power, 200*time.Millisecond, false); err != nil {
-		log.Printf("[lifx] SetLightPower failed for %s: %v", deviceID, err)
-		return err
-	}
-	log.Printf("[lifx] Power set to %v for %s", power.On(), deviceID)
-	return nil
+	return ld, conn, nil
 }
 
 // getLight retrieves a known light, or re-discovers if missing.
@@ -254,7 +237,7 @@ func (c *LIFXController) Close() error {
 }
 
 func stateToLIFXColor(state DeviceState) lifxlan.Color {
-	kelvin := uint16(3500)
+	kelvin := uint16(DefaultKelvin)
 	if state.Kelvin != nil {
 		kelvin = uint16(*state.Kelvin)
 	}

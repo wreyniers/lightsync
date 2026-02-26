@@ -42,7 +42,7 @@ type HueBridge struct {
 }
 
 type Store struct {
-	mu       sync.RWMutex
+	mu       sync.Mutex
 	config   Config
 	filePath string
 }
@@ -69,108 +69,81 @@ func New() (*Store, error) {
 	return s, nil
 }
 
-func (s *Store) GetConfig() Config {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.config
-}
-
 func (s *Store) GetDevices() []lights.Device {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.config.Devices
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]lights.Device(nil), s.config.Devices...)
 }
 
 func (s *Store) SetDevices(devices []lights.Device) error {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.config.Devices = devices
-	s.mu.Unlock()
-	return s.save()
+	return s.saveLocked()
 }
 
 func (s *Store) GetScenes() []Scene {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.config.Scenes
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]Scene(nil), s.config.Scenes...)
 }
 
 func (s *Store) SetScenes(scenes []Scene) error {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.config.Scenes = scenes
-	s.mu.Unlock()
-	return s.save()
+	return s.saveLocked()
 }
 
 func (s *Store) GetSettings() Settings {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	return s.config.Settings
 }
 
 func (s *Store) SetSettings(settings Settings) error {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.config.Settings = settings
-	s.mu.Unlock()
-	return s.save()
+	return s.saveLocked()
 }
 
 func (s *Store) GetHueBridges() []HueBridge {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.config.HueBridges
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]HueBridge(nil), s.config.HueBridges...)
 }
 
 func (s *Store) SetHueBridges(bridges []HueBridge) error {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.config.HueBridges = bridges
-	s.mu.Unlock()
-	return s.save()
-}
-
-func (s *Store) UpsertDevice(device lights.Device) error {
-	s.mu.Lock()
-	found := false
-	for i, d := range s.config.Devices {
-		if d.ID == device.ID {
-			s.config.Devices[i] = device
-			found = true
-			break
-		}
-	}
-	if !found {
-		s.config.Devices = append(s.config.Devices, device)
-	}
-	s.mu.Unlock()
-	return s.save()
+	return s.saveLocked()
 }
 
 func (s *Store) UpsertScene(scene Scene) error {
 	s.mu.Lock()
-	found := false
+	defer s.mu.Unlock()
 	for i, sc := range s.config.Scenes {
 		if sc.ID == scene.ID {
 			s.config.Scenes[i] = scene
-			found = true
-			break
+			return s.saveLocked()
 		}
 	}
-	if !found {
-		s.config.Scenes = append(s.config.Scenes, scene)
-	}
-	s.mu.Unlock()
-	return s.save()
+	s.config.Scenes = append(s.config.Scenes, scene)
+	return s.saveLocked()
 }
 
 func (s *Store) DeleteScene(id string) error {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	for i, sc := range s.config.Scenes {
 		if sc.ID == id {
 			s.config.Scenes = append(s.config.Scenes[:i], s.config.Scenes[i+1:]...)
 			break
 		}
 	}
-	s.mu.Unlock()
-	return s.save()
+	return s.saveLocked()
 }
 
 func (s *Store) load() error {
@@ -183,10 +156,9 @@ func (s *Store) load() error {
 	return json.Unmarshal(data, &s.config)
 }
 
-func (s *Store) save() error {
-	s.mu.RLock()
+// saveLocked marshals config and writes atomically. Caller must hold s.mu.
+func (s *Store) saveLocked() error {
 	data, err := json.MarshalIndent(s.config, "", "  ")
-	s.mu.RUnlock()
 	if err != nil {
 		return err
 	}
@@ -196,7 +168,11 @@ func (s *Store) save() error {
 		return err
 	}
 
-	return os.WriteFile(s.filePath, data, 0644)
+	tmp := s.filePath + ".tmp"
+	if err := os.WriteFile(tmp, data, 0644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, s.filePath)
 }
 
 func configPath() (string, error) {

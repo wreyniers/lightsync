@@ -36,6 +36,8 @@ func (a *App) onTrayReady() {
 	go func() {
 		for {
 			select {
+			case <-a.ctx.Done():
+				return
 			case <-mShow.ClickedCh:
 				runtime.WindowShow(a.ctx)
 				runtime.WindowSetAlwaysOnTop(a.ctx, true)

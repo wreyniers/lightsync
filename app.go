@@ -3,11 +3,9 @@ package main
 import (
 	"bytes"
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
-	"net/http"
 	"time"
 
 	"github.com/google/uuid"
@@ -59,16 +57,17 @@ func (a *App) startup(ctx context.Context) {
 	a.lightManager.RegisterController(a.elgatoCtrl)
 	a.lightManager.RegisterController(a.goveeCtrl)
 
-	for _, bridge := range a.store.GetHueBridges() {
+	bridges := a.store.GetHueBridges()
+	for _, bridge := range bridges {
 		if err := a.hueCtrl.AddBridge(bridge.IP, bridge.Username); err != nil {
 			runtime.LogWarningf(ctx, "Failed to add Hue bridge %s: %v", bridge.IP, err)
 		}
 	}
 
-	if len(a.store.GetHueBridges()) > 0 {
+	if len(bridges) > 0 {
 		hueCtx, hueCancel := context.WithTimeout(ctx, 10*time.Second)
-		if lights, err := a.hueCtrl.Discover(hueCtx); err == nil && len(lights) > 0 {
-			runtime.LogInfof(ctx, "Loaded %d Hue light(s) from bridge(s)", len(lights))
+		if discovered, err := a.hueCtrl.Discover(hueCtx); err == nil && len(discovered) > 0 {
+			runtime.LogInfof(ctx, "Loaded %d Hue light(s) from bridge(s)", len(discovered))
 		}
 		hueCancel()
 	}
@@ -266,12 +265,7 @@ type PairResult struct {
 }
 
 func (a *App) PairHueBridge(ip string) PairResult {
-	httpClient := &http.Client{
-		Timeout: 5 * time.Second,
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-		},
-	}
+	httpClient := lights.NewHueHTTPClient(5 * time.Second)
 
 	body, _ := json.Marshal(map[string]interface{}{
 		"devicetype":        "lightsync#app",
