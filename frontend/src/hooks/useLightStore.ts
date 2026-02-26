@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from "react";
 import { EventsOn } from "../../wailsjs/runtime/runtime";
-import type { Device, DeviceState, Color } from "@/lib/types";
+import type { Device, DeviceState, Color, Scene } from "@/lib/types";
 import {
   GetDevices,
   GetLightState,
@@ -8,6 +8,8 @@ import {
   TurnOffLight,
   SetLightState,
   DiscoverLights,
+  GetActiveScene,
+  GetScene,
 } from "../../wailsjs/go/main/App";
 import { lights } from "../../wailsjs/go/models";
 
@@ -17,6 +19,7 @@ interface LightStoreState {
   brightness: Record<string, number>;
   kelvin: Record<string, number>;
   color: Record<string, Color>;
+  activeScene: Scene | null;
 }
 
 let state: LightStoreState = {
@@ -25,6 +28,7 @@ let state: LightStoreState = {
   brightness: {},
   kelvin: {},
   color: {},
+  activeScene: null,
 };
 
 const listeners = new Set<() => void>();
@@ -48,12 +52,28 @@ function scheduleSend(deviceId: string, fn: () => Promise<void>) {
 const userSetAt: Record<string, number> = {};
 const USER_SET_GRACE_MS = 2000;
 
+// Tracks when a scene was last applied. fetchLightStates skips devices that
+// were part of a recently applied scene — hardware may not have caught up yet.
+const sceneAppliedAt: Record<string, number> = {};
+const SCENE_APPLIED_GRACE_MS = 4000;
+
 function markUserSet(deviceId: string) {
   userSetAt[deviceId] = Date.now();
 }
 
 function recentlySetByUser(deviceId: string): boolean {
   return Date.now() - (userSetAt[deviceId] ?? 0) < USER_SET_GRACE_MS;
+}
+
+function markSceneApplied(deviceIds: string[]) {
+  const now = Date.now();
+  for (const id of deviceIds) {
+    sceneAppliedAt[id] = now;
+  }
+}
+
+function recentlyAppliedByScene(deviceId: string): boolean {
+  return Date.now() - (sceneAppliedAt[deviceId] ?? 0) < SCENE_APPLIED_GRACE_MS;
 }
 
 function emit() {
@@ -86,10 +106,10 @@ async function fetchLightStates(deviceList: Device[]) {
     if (r.status === "fulfilled") {
       const { id, state: s } = r.value;
       onOff[id] = s.on;
-      // Skip brightness/kelvin/color while a user action is still in flight.
+      // Skip brightness/kelvin/color while a user action or scene apply is in flight.
       // Slow devices (Elgato HTTP) can return stale state before the hardware
       // applies the change, which would clobber the optimistic store update.
-      if (!recentlySetByUser(id)) {
+      if (!recentlySetByUser(id) && !recentlyAppliedByScene(id)) {
         if (s.brightness != null) bright[id] = Math.round(s.brightness * 100);
         if (s.kelvin != null) temps[id] = s.kelvin;
         if (s.color != null) colors[id] = s.color;
@@ -110,17 +130,24 @@ async function refreshDevices() {
         GetLightState(dev.id).then((s) => ({ id: dev.id, state: s }))
       )
     );
-    const onOff: Record<string, boolean> = {};
-    const bright: Record<string, number> = {};
-    const temps: Record<string, number> = {};
-    const colors: Record<string, Color> = {};
+    const onOff = { ...state.deviceOn };
+    const bright = { ...state.brightness };
+    const temps = { ...state.kelvin };
+    const colors = { ...state.color };
     for (const r of results) {
       if (r.status === "fulfilled") {
         const { id, state: s } = r.value;
         onOff[id] = s.on;
-        if (s.brightness != null) bright[id] = Math.round(s.brightness * 100);
-        if (s.kelvin != null) temps[id] = s.kelvin;
-        if (s.color != null) colors[id] = s.color;
+        if (!recentlySetByUser(id) && !recentlyAppliedByScene(id)) {
+          if (s.brightness != null) bright[id] = Math.round(s.brightness * 100);
+          if (s.color != null) {
+            colors[id] = s.color;
+            delete temps[id];
+          } else if (s.kelvin != null) {
+            temps[id] = s.kelvin;
+            delete colors[id];
+          }
+        }
       }
     }
 
@@ -237,19 +264,123 @@ async function setColor(deviceId: string, color: Color) {
   });
 }
 
+/** Apply device state from a scene. Clears color when using kelvin and vice versa. */
+function applyDeviceStateFromScene(
+  onOff: Record<string, boolean>,
+  bright: Record<string, number>,
+  temps: Record<string, number>,
+  colors: Record<string, Color>,
+  sceneDevices: Record<string, DeviceState>
+) {
+  for (const [id, ds] of Object.entries(sceneDevices)) {
+    onOff[id] = ds.on;
+    if (ds.brightness != null) bright[id] = Math.round(ds.brightness * 100);
+    if (ds.color != null) {
+      colors[id] = ds.color;
+      delete temps[id]; // clear kelvin when using color (LightCard resolves mode)
+    } else if (ds.kelvin != null) {
+      temps[id] = ds.kelvin;
+      delete colors[id]; // clear color when using kelvin
+    }
+  }
+}
+
 function applySceneStates(sceneDevices: Record<string, DeviceState>) {
   const onOff = { ...state.deviceOn };
   const bright = { ...state.brightness };
   const temps = { ...state.kelvin };
   const colors = { ...state.color };
-  for (const [id, ds] of Object.entries(sceneDevices)) {
-    onOff[id] = ds.on;
-    if (ds.brightness != null) bright[id] = Math.round(ds.brightness * 100);
-    if (ds.kelvin != null) temps[id] = ds.kelvin;
-    if (ds.color != null) colors[id] = ds.color;
-  }
+  applyDeviceStateFromScene(onOff, bright, temps, colors, sceneDevices);
   state = { ...state, deviceOn: onOff, brightness: bright, kelvin: temps, color: colors };
   emit();
+}
+
+/** Apply scene states and set active scene in one atomic update. Prevents Layout deviated race. */
+function setActiveSceneWithStates(scene: Scene, sceneDevices: Record<string, DeviceState>) {
+  const onOff = { ...state.deviceOn };
+  const bright = { ...state.brightness };
+  const temps = { ...state.kelvin };
+  const colors = { ...state.color };
+  applyDeviceStateFromScene(onOff, bright, temps, colors, sceneDevices);
+  markSceneApplied(Object.keys(sceneDevices));
+  state = { ...state, deviceOn: onOff, brightness: bright, kelvin: temps, color: colors, activeScene: scene };
+  emit();
+}
+
+/** Apply scene states to store and hardware for live preview. Does not activate the scene. */
+async function previewSceneStates(sceneDevices: Record<string, DeviceState>) {
+  applySceneStates(sceneDevices);
+  for (const [id, ds] of Object.entries(sceneDevices)) {
+    const brightness =
+      typeof ds.brightness === "number" && ds.brightness <= 1
+        ? ds.brightness
+        : (ds.brightness ?? 80) / 100;
+    const s = new lights.DeviceState({
+      on: ds.on,
+      brightness,
+      kelvin: ds.kelvin ?? 4000,
+      color: ds.color ? new lights.Color(ds.color) : undefined,
+    });
+    try {
+      await SetLightState(id, s);
+    } catch (e) {
+      console.error("Failed to preview scene state:", id, e);
+    }
+  }
+}
+
+/** Restore lights to a prior state. Updates the store and sends commands to hardware. */
+async function restoreLightStates(
+  states: Record<string, DeviceState>,
+  deviceList: Device[]
+) {
+  applySceneStates(states);
+  const ids = Object.keys(states);
+  for (const id of ids) {
+    const ds = states[id];
+    if (!ds) continue;
+    const brightness =
+      typeof ds.brightness === "number" && ds.brightness <= 1
+        ? ds.brightness
+        : (ds.brightness ?? 80) / 100;
+    const s = new lights.DeviceState({
+      on: ds.on,
+      brightness,
+      kelvin: ds.kelvin ?? 4000,
+      color: ds.color ? new lights.Color(ds.color) : undefined,
+    });
+    try {
+      await SetLightState(id, s);
+    } catch (e) {
+      console.error("Failed to restore light state:", id, e);
+    }
+  }
+  await fetchLightStates(deviceList.filter((d) => ids.includes(d.id)));
+}
+
+async function hydrateActiveScene() {
+  try {
+    const id = await GetActiveScene();
+    if (!id) return;
+    const scene = await GetScene(id);
+    if (scene?.devices && Object.keys(scene.devices).length > 0) {
+      setActiveSceneWithStates(scene as Scene, scene.devices);
+    } else if (scene) {
+      state = { ...state, activeScene: scene as Scene };
+      emit();
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
+function setActiveSceneOptimistic(scene: Scene) {
+  if (scene?.devices && Object.keys(scene.devices).length > 0) {
+    setActiveSceneWithStates(scene, scene.devices);
+  } else if (scene) {
+    state = { ...state, activeScene: scene };
+    emit();
+  }
 }
 
 export const lightActions = {
@@ -261,23 +392,40 @@ export const lightActions = {
   setTemperature,
   setColor,
   applySceneStates,
+  setActiveSceneOptimistic,
+  previewSceneStates,
+  restoreLightStates,
   refreshLightStates: () => fetchLightStates(state.devices),
+  hydrateActiveScene,
 };
 
 export function useLightStore(): LightStoreState {
   return useSyncExternalStore(subscribe, getSnapshot);
 }
 
-// Auto-refresh when the backend triggers a scene via camera change.
-// Staggered: quick check at 500ms, follow-up at 2s to catch stragglers.
-function setupCameraListener() {
+// When scene:active fires, apply preset states AND active scene in one atomic update.
+// Layout reads both from the store, so no race and no second source (useWailsEvent).
+function setupSceneActiveListener() {
   try {
-    EventsOn("camera:state", () => {
-      setTimeout(() => fetchLightStates(state.devices), 500);
-      setTimeout(() => fetchLightStates(state.devices), 2000);
+    EventsOn("scene:active", (payload: unknown) => {
+      if (!payload || !state.devices.length) return;
+      const scene = typeof payload === "object" && payload !== null && "devices" in payload && payload.devices
+        ? (payload as Scene)
+        : null;
+      if (scene?.devices && Object.keys(scene.devices).length > 0) {
+        setActiveSceneWithStates(scene, scene.devices);
+      } else if (scene) {
+        state = { ...state, activeScene: scene };
+        emit();
+      }
     });
   } catch {
-    setTimeout(setupCameraListener, 500);
+    setTimeout(setupSceneActiveListener, 500);
   }
 }
-setupCameraListener();
+setupSceneActiveListener();
+
+// camera:state fires when webcam turns on/off. The backend then emits scene:active
+// with the full scene — we apply that and do NOT refetch from hardware here.
+// fetchLightStates would overwrite our optimistic update with stale hardware state
+// (slow devices like Elgato haven't applied the change yet).

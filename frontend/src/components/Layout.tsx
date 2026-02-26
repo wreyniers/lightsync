@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { cn } from "@/lib/utils";
+import { sceneSwatchBackground, liveSwatchBackground } from "@/lib/sceneColors";
 import {
   Lightbulb,
   Film,
@@ -7,15 +8,14 @@ import {
   Camera,
   CameraOff,
 } from "lucide-react";
-import { useWailsEvent } from "@/hooks/useWails";
+import { useLightStore, lightActions } from "@/hooks/useLightStore";
 import { Toggle } from "@/components/ui/Toggle";
-import type { Scene } from "@/lib/types";
 import {
   IsMonitoringEnabled,
   SetMonitoringEnabled,
-  GetScenes,
-  GetActiveScene,
+  GetCameraState,
 } from "../../wailsjs/go/main/App";
+import { EventsOn } from "../../wailsjs/runtime/runtime";
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -30,23 +30,74 @@ const navItems = [
 ];
 
 export function Layout({ children, currentPage, onNavigate }: LayoutProps) {
-  const cameraOn = useWailsEvent<boolean>("camera:state", false);
-  const activeSceneEvent = useWailsEvent<string>("scene:active", "");
+  // Hydrate camera state on mount so UI shows correct value immediately; then
+  // subscribe to camera:state for live updates. This avoids staged updates on load.
+  const [cameraOn, setCameraOn] = useState(false);
+  useEffect(() => {
+    GetCameraState().then(setCameraOn).catch(() => {});
+  }, []);
+  useEffect(() => {
+    const off = EventsOn("camera:state", (v: boolean) => setCameraOn(v));
+    return () => off?.();
+  }, []);
+
+  const lightStore = useLightStore();
   const [monitoring, setMonitoring] = useState(true);
-  const [scenes, setScenes] = useState<Scene[]>([]);
-  const [activeSceneId, setActiveSceneId] = useState("");
 
   useEffect(() => {
     IsMonitoringEnabled().then(setMonitoring).catch(() => {});
-    GetScenes().then((s) => setScenes(s || [])).catch(() => {});
-    GetActiveScene().then(setActiveSceneId).catch(() => {});
+    lightActions.hydrateActiveScene();
   }, []);
 
-  useEffect(() => {
-    if (activeSceneEvent) setActiveSceneId(activeSceneEvent);
-  }, [activeSceneEvent]);
+  // Single source of truth: store holds activeScene + device states atomically.
+  const activeScene = lightStore.activeScene ?? null;
 
-  const activeSceneName = scenes.find((s) => s.id === activeSceneId)?.name;
+  // Detect whether live light state has drifted from the active scene's preset.
+  // Checks color/kelvin mode and value — brightness drift is intentionally ignored
+  // to avoid noise from minor adjustments.
+  const deviated = useMemo(() => {
+    if (!activeScene) return false;
+    for (const [id, sceneState] of Object.entries(activeScene.devices || {})) {
+      const liveColor = lightStore.color[id];
+      const liveKelvin = lightStore.kelvin[id];
+      // Skip devices the store hasn't loaded yet.
+      if (liveColor === undefined && liveKelvin === undefined) continue;
+      const sceneHasColor = !!sceneState.color;
+      const liveHasColor = !!liveColor;
+      if (sceneHasColor !== liveHasColor) return true;
+      if (sceneState.color && liveColor) {
+        if (Math.abs(sceneState.color.h - liveColor.h) > 8) return true;
+        if (Math.abs(sceneState.color.s - liveColor.s) > 0.08) return true;
+      }
+      if (sceneState.kelvin && liveKelvin) {
+        if (Math.abs(sceneState.kelvin - liveKelvin) > 150) return true;
+      }
+    }
+    return false;
+  }, [activeScene, lightStore]);
+
+  // Color swatches: when deviated show live light colors, otherwise scene colors.
+  const sceneSwatch = useMemo(
+    () => (activeScene ? sceneSwatchBackground(activeScene) : null),
+    [activeScene]
+  );
+
+  const liveSwatch = useMemo(
+    () =>
+      liveSwatchBackground(
+        lightStore.devices,
+        lightStore.deviceOn,
+        lightStore.color,
+        lightStore.kelvin
+      ),
+    [lightStore]
+  );
+
+  const displaySwatch = deviated ? liveSwatch : sceneSwatch;
+  const displayName = activeScene
+    ? deviated ? "Custom" : (activeScene.name ?? "")
+    : "No Scene";
+  const sceneIsActive = !!activeScene;
 
   const handleToggleMonitoring = (enabled: boolean) => {
     SetMonitoringEnabled(enabled);
@@ -55,7 +106,7 @@ export function Layout({ children, currentPage, onNavigate }: LayoutProps) {
 
   return (
     <div className="flex h-screen">
-      <aside className="w-64 border-r border-border bg-card flex flex-col">
+      <aside className="w-64 bg-card flex flex-col">
         <div className="p-6">
           <div className="flex items-center gap-3">
             <div className="h-9 w-9 rounded-lg bg-primary/20 flex items-center justify-center">
@@ -69,48 +120,58 @@ export function Layout({ children, currentPage, onNavigate }: LayoutProps) {
         </div>
 
         <div className="px-3 mb-4 space-y-2">
+          {/* Camera status card */}
           <div
             className={cn(
-              "flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm",
-              cameraOn
-                ? "bg-success/10 text-success"
-                : "bg-muted text-muted-foreground"
+              "flex items-center gap-3 rounded-xl px-4 py-3",
+              cameraOn ? "bg-success/10" : "bg-muted"
             )}
           >
-            {cameraOn ? (
-              <Camera className="h-4 w-4" />
-            ) : (
-              <CameraOff className="h-4 w-4" />
-            )}
-            <span className="font-medium">
-              Camera {cameraOn ? "Active" : "Off"}
-            </span>
-            <span
-              className={cn(
-                "ml-auto h-2 w-2 rounded-full",
-                cameraOn ? "bg-success animate-pulse" : "bg-muted-foreground/40"
+            <div className={cn(
+              "h-8 w-8 shrink-0 rounded-lg flex items-center justify-center",
+              cameraOn ? "bg-success/20" : "bg-background/40"
+            )}>
+              {cameraOn ? (
+                <Camera className="h-4 w-4 text-success" />
+              ) : (
+                <CameraOff className="h-4 w-4 text-muted-foreground" />
               )}
-            />
+            </div>
+            <div className="min-w-0">
+              <p className={cn("text-sm font-semibold leading-tight", cameraOn ? "text-success" : "text-muted-foreground")}>
+                {cameraOn ? "Camera Active" : "Camera Off"}
+              </p>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                {cameraOn ? "Monitoring webcam" : "Not monitoring"}
+              </p>
+            </div>
           </div>
 
+          {/* Scene status card */}
           <div
             className={cn(
-              "flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm",
-              activeSceneName
-                ? "bg-primary/10 text-primary"
-                : "bg-muted text-muted-foreground"
+              "flex items-center gap-3 rounded-xl px-4 py-3",
+              sceneIsActive ? "bg-primary/10" : "bg-muted"
             )}
           >
-            <Film className="h-4 w-4" />
-            <span className="font-medium truncate">
-              {activeSceneName || "No Scene"}
-            </span>
-            <span
-              className={cn(
-                "ml-auto h-2 w-2 shrink-0 rounded-full",
-                activeSceneName ? "bg-primary animate-pulse" : "bg-muted-foreground/40"
+            <div className={cn(
+              "h-8 w-8 shrink-0 rounded-lg flex items-center justify-center overflow-hidden",
+              !displaySwatch && (sceneIsActive ? "bg-primary/20" : "bg-background/40")
+            )}>
+              {displaySwatch ? (
+                <div className="h-8 w-8 rounded-lg" style={{ background: displaySwatch }} />
+              ) : (
+                <Film className={cn("h-4 w-4", sceneIsActive ? "text-primary" : "text-muted-foreground")} />
               )}
-            />
+            </div>
+            <div className="min-w-0">
+              <p className={cn("text-sm font-semibold leading-tight truncate", sceneIsActive ? "text-primary" : "text-muted-foreground")}>
+                {displayName}
+              </p>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                {sceneIsActive ? (deviated ? "Modified from preset" : "Scene active") : "No scene running"}
+              </p>
+            </div>
           </div>
         </div>
 
@@ -141,7 +202,7 @@ export function Layout({ children, currentPage, onNavigate }: LayoutProps) {
           <Toggle checked={monitoring} onChange={handleToggleMonitoring} />
         </div>
 
-        <div className="p-4 border-t border-border">
+        <div className="p-4">
           <p className="text-xs text-muted-foreground text-center">
             LightSync v1.0.0
           </p>

@@ -17,7 +17,7 @@ const Button = forwardRef<HTMLButtonElement, ButtonProps>(
             "bg-secondary text-secondary-foreground hover:bg-secondary/80": variant === "secondary",
             "bg-destructive text-destructive-foreground hover:bg-destructive/90": variant === "destructive",
             "hover:bg-secondary": variant === "ghost",
-            "border border-border bg-transparent hover:bg-secondary": variant === "outline",
+            "bg-transparent hover:bg-secondary": variant === "outline",
           },
           {
             "h-10 px-4 py-2 text-sm": size === "default",

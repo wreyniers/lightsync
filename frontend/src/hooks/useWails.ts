@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useState, useRef } from "react";
 import { EventsOn } from "../../wailsjs/runtime/runtime";
 
 function isRuntimeReady(): boolean {
@@ -41,28 +41,4 @@ export function useWailsEvent<T>(eventName: string, initialValue: T): T {
   }, [eventName]);
 
   return value;
-}
-
-export function usePolling<T>(
-  fetcher: () => Promise<T>,
-  intervalMs: number,
-  deps: unknown[] = []
-): { data: T | null; loading: boolean; refresh: () => void } {
-  const [data, setData] = useState<T | null>(null);
-  const [loading, setLoading] = useState(true);
-
-  const refresh = useCallback(() => {
-    fetcher()
-      .then(setData)
-      .catch(console.error)
-      .finally(() => setLoading(false));
-  }, deps);
-
-  useEffect(() => {
-    refresh();
-    const id = setInterval(refresh, intervalMs);
-    return () => clearInterval(id);
-  }, [refresh, intervalMs]);
-
-  return { data, loading, refresh };
 }

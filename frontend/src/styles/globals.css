@@ -3,13 +3,13 @@
 @theme {
   --color-background: #0a0a0f;
   --color-foreground: #fafafa;
-  --color-card: #111118;
+  --color-card: rgba(255, 255, 255, 0.05);
   --color-card-foreground: #fafafa;
-  --color-popover: #111118;
+  --color-popover: rgba(255, 255, 255, 0.07);
   --color-popover-foreground: #fafafa;
   --color-primary: #6366f1;
   --color-primary-foreground: #fafafa;
-  --color-secondary: #1e1e2e;
+  --color-secondary: rgba(255, 255, 255, 0.03);
   --color-secondary-foreground: #fafafa;
   --color-muted: #1a1a24;
   --color-muted-foreground: #a1a1aa;
@@ -29,9 +29,6 @@
   --font-sans: "Inter", system-ui, -apple-system, sans-serif;
 }
 
-* {
-  border-color: var(--color-border);
-}
 
 body {
   background-color: var(--color-background);

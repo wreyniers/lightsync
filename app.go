@@ -76,8 +76,8 @@ func (a *App) startup(ctx context.Context) {
 
 	a.scanner = discovery.NewScanner(a.lightManager, a.elgatoCtrl)
 	a.sceneManager = scenes.NewManager(a.store, a.lightManager)
-	a.sceneManager.OnChange(func(sceneID string) {
-		runtime.EventsEmit(a.ctx, "scene:active", sceneID)
+	a.sceneManager.OnChange(func(scene store.Scene) {
+		runtime.EventsEmit(a.ctx, "scene:active", scene)
 	})
 
 	settings := a.store.GetSettings()
@@ -168,13 +168,15 @@ func (a *App) GetScene(id string) (store.Scene, error) {
 }
 
 type CreateSceneRequest struct {
-	Name    string                        `json:"name"`
-	Trigger string                        `json:"trigger"`
-	Devices map[string]lights.DeviceState `json:"devices"`
+	Name         string                        `json:"name"`
+	Trigger      string                        `json:"trigger"`
+	Devices      map[string]lights.DeviceState `json:"devices"`
+	GlobalColor  *lights.Color                 `json:"globalColor,omitempty"`
+	GlobalKelvin *int                          `json:"globalKelvin,omitempty"`
 }
 
 func (a *App) CreateScene(req CreateSceneRequest) (store.Scene, error) {
-	return a.sceneManager.CreateScene(req.Name, req.Trigger, req.Devices)
+	return a.sceneManager.CreateScene(req.Name, req.Trigger, req.Devices, req.GlobalColor, req.GlobalKelvin)
 }
 
 func (a *App) UpdateScene(scene store.Scene) error {

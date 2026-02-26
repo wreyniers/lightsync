@@ -1,29 +1,27 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import {
   Plus,
-  Trash2,
   Camera,
   CameraOff,
   Film,
   Play,
-  Pencil,
   X,
   Check,
-  Thermometer,
   Lightbulb,
   Palette,
 } from "lucide-react";
 import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
-import { Toggle } from "@/components/ui/Toggle";
-import { RockerSwitch } from "@/components/ui/RockerSwitch";
-import { ColorPicker } from "@/components/ui/ColorPicker";
-import { TemperaturePicker } from "@/components/ui/TemperaturePicker";
+import { LightCard } from "@/components/ui/LightCard";
+import { ColorWheel, KelvinSlider } from "@/components/ui/ColorPanel";
+import { SegmentedControl } from "@/components/ui/SegmentedControl";
 import type { Device, DeviceState, Color } from "@/lib/types";
-import { kelvinToCSS, hsbToCSS } from "@/lib/utils";
+import { hueToKelvin, kelvinToHSB } from "@/lib/utils";
+import { getBrandInfo, groupByBrand } from "@/lib/brands";
+import { sceneSwatchBackground } from "@/lib/sceneColors";
+import { SceneRow } from "@/components/SceneRow";
 import { useLightStore, lightActions } from "@/hooks/useLightStore";
-import { useWailsEvent } from "@/hooks/useWails";
 import { lights, main, store } from "../../wailsjs/go/models";
 import {
   GetScenes,
@@ -31,150 +29,100 @@ import {
   UpdateScene,
   DeleteScene,
   ActivateScene,
-  GetActiveScene,
 } from "../../wailsjs/go/main/App";
 
 type Scene = store.Scene;
 type LightMode = "color" | "kelvin";
 
-const brandInfo: Record<string, { color: string; label: string }> = {
-  lifx: { color: "text-green-400", label: "LIFX" },
-  hue: { color: "text-blue-400", label: "Philips Hue" },
-  elgato: { color: "text-yellow-400", label: "Elgato" },
-  govee: { color: "text-purple-400", label: "Govee" },
-};
-
-function groupByBrand(devices: Device[]): Record<string, Device[]> {
-  const grouped: Record<string, Device[]> = {};
-  for (const d of devices) {
-    if (!grouped[d.brand]) grouped[d.brand] = [];
-    grouped[d.brand].push(d);
-  }
-  return grouped;
-}
-
-function ColorSwatch({ color }: { color: Color }) {
-  return (
-    <span
-      className="inline-block h-4 w-4 rounded-full border border-white/20 shrink-0"
-      style={{ backgroundColor: hsbToCSS(color.h, color.s, color.b) }}
-    />
-  );
-}
-
-function TempSwatch({ kelvin }: { kelvin: number }) {
-  return (
-    <span
-      className="inline-block h-4 w-4 rounded-full border border-white/20 shrink-0"
-      style={{ backgroundColor: kelvinToCSS(kelvin) }}
-    />
-  );
-}
-
-function deviceSceneColor(state: DeviceState | undefined): string | undefined {
-  if (!state) return undefined;
-  if (state.color) return hsbToCSS(state.color.h, state.color.s, state.color.b);
-  if (state.kelvin) return kelvinToCSS(state.kelvin);
-  return undefined;
-}
-
-function ModeToggle({
-  mode,
-  onSwitch,
-}: {
-  mode: LightMode;
-  onSwitch: (m: LightMode) => void;
-}) {
-  return (
-    <div className="flex rounded-md border border-border overflow-hidden text-xs">
-      <button
-        type="button"
-        onClick={() => onSwitch("color")}
-        className={`px-2.5 py-1 transition-colors ${
-          mode === "color"
-            ? "bg-primary/20 text-primary font-medium"
-            : "text-muted-foreground hover:bg-secondary"
-        }`}
-      >
-        Color
-      </button>
-      <div className="w-px bg-border" />
-      <button
-        type="button"
-        onClick={() => onSwitch("kelvin")}
-        className={`px-2.5 py-1 transition-colors ${
-          mode === "kelvin"
-            ? "bg-primary/20 text-primary font-medium"
-            : "text-muted-foreground hover:bg-secondary"
-        }`}
-      >
-        Temp
-      </button>
-    </div>
-  );
-}
-
 const DEFAULT_COLOR: Color = { h: 30, s: 1, b: 1 };
+type GlobalMode = "none" | "color" | "kelvin";
 
-function resolveDeviceMode(
-  state: DeviceState | undefined,
-  overrides: Record<string, LightMode>
-): LightMode {
-  if (overrides["_"]) return overrides["_"]; // should not happen but guard
-  if (state?.color) return "color";
-  if (state?.kelvin) return "kelvin";
-  return "color";
+/** Build DeviceState from store values. Store uses brightness 0-100; DeviceState uses 0-1. */
+function captureDeviceState(
+  deviceOn: Record<string, boolean>,
+  brightness: Record<string, number>,
+  kelvin: Record<string, number>,
+  color: Record<string, Color>,
+  deviceId: string
+): DeviceState {
+  const on = deviceOn[deviceId] ?? false;
+  const bright = brightness[deviceId] ?? 80;
+  return {
+    on,
+    brightness: bright <= 1 ? bright : bright / 100,
+    kelvin: kelvin[deviceId],
+    color: color[deviceId],
+  };
 }
 
 export function Scenes() {
-  const { devices } = useLightStore();
-  const activeSceneEvent = useWailsEvent<string>("scene:active", "");
+  const { devices, deviceOn, brightness, kelvin, color, activeScene: storeActiveScene } = useLightStore();
   const [scenes, setScenes] = useState<Scene[]>([]);
-  const [activeScene, setActiveScene] = useState("");
   const [editing, setEditing] = useState<Scene | null>(null);
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
-  const [newTrigger, setNewTrigger] = useState("camera_on");
+  const [newTrigger, setNewTrigger] = useState("");
   const [newDevices, setNewDevices] = useState<Record<string, DeviceState>>({});
+
+  // Snapshot of light states before edit mode; restored when exiting.
+  const [preEditLightStates, setPreEditLightStates] = useState<Record<string, DeviceState>>({});
 
   // Per-device mode overrides (keyed by device id).
   const [deviceModes, setDeviceModes] = useState<Record<string, LightMode>>({});
 
-  // Global color settings.
-  const [globalColor, setGlobalColor] = useState(false);
+  // Global override — one mode at a time; brightness stays per-device.
+  const [globalMode, setGlobalMode] = useState<GlobalMode>("none");
   const [globalColorValue, setGlobalColorValue] = useState<Color>(DEFAULT_COLOR);
-
-  // Global temperature settings.
-  const [globalTemp, setGlobalTemp] = useState(false);
   const [globalKelvin, setGlobalKelvin] = useState(4000);
-  const [globalBrightness, setGlobalBrightness] = useState(0.8);
+
+  // True when the editor has unsaved changes relative to the saved scene.
+  // Always true when creating (nothing to compare against).
+  const isDirty = useMemo(() => {
+    if (creating) return true;
+    if (!editing) return false;
+
+    if (newName.trim() !== editing.name) return true;
+    if (newTrigger !== editing.trigger) return true;
+
+    // Deep-compare device maps via JSON — both are plain serialisable objects.
+    if (JSON.stringify(newDevices) !== JSON.stringify(editing.devices ?? {})) return true;
+
+    // Reconstruct the saved global mode from the persisted fields.
+    const savedGlobalMode: GlobalMode = editing.globalColor
+      ? "color"
+      : editing.globalKelvin != null
+      ? "kelvin"
+      : "none";
+    if (globalMode !== savedGlobalMode) return true;
+    if (globalMode === "color" && JSON.stringify(globalColorValue) !== JSON.stringify(editing.globalColor)) return true;
+    if (globalMode === "kelvin" && globalKelvin !== editing.globalKelvin) return true;
+
+    return false;
+  }, [creating, editing, newName, newTrigger, newDevices, globalMode, globalColorValue, globalKelvin]);
 
   const refresh = useCallback(() => {
     GetScenes()
       .then((s) => setScenes(s || []))
       .catch(() => {});
     lightActions.refreshDevices();
-    GetActiveScene().then(setActiveScene).catch(() => {});
+    lightActions.hydrateActiveScene();
   }, []);
 
   useEffect(() => { refresh(); }, [refresh]);
 
-  useEffect(() => {
-    if (activeSceneEvent) setActiveScene(activeSceneEvent);
-  }, [activeSceneEvent]);
+  const activeSceneId = storeActiveScene?.id ?? "";
 
   const startCreate = () => {
     setCreating(true);
     setNewName("");
-    setNewTrigger("camera_on");
+    setNewTrigger("");
     setNewDevices({});
     setDeviceModes({});
-    setGlobalColor(false);
+    setGlobalMode("none");
     setGlobalColorValue(DEFAULT_COLOR);
-    setGlobalTemp(false);
     setGlobalKelvin(4000);
-    setGlobalBrightness(0.8);
     setEditing(null);
+    setPreEditLightStates({});
   };
 
   const startEdit = (scene: Scene) => {
@@ -186,31 +134,48 @@ export function Scenes() {
     setDeviceModes({});
     setCreating(false);
 
-    // Detect if all included on-devices share the same color.
-    const colors = Object.values(devs).filter((s) => s.on && s.color).map((s) => s.color!);
-    const allSameColor =
-      colors.length > 0 &&
-      colors.every(
-        (c) =>
-          Math.round(c.h) === Math.round(colors[0].h) &&
-          Math.round(c.s * 100) === Math.round(colors[0].s * 100)
-      );
-    setGlobalColor(allSameColor);
-    setGlobalColorValue(allSameColor ? colors[0] : DEFAULT_COLOR);
+    // Restore global override that was saved with the scene; fall back to none.
+    if (scene.globalColor) {
+      setGlobalMode("color");
+      setGlobalColorValue(scene.globalColor);
+      setGlobalKelvin(4000);
+    } else if (scene.globalKelvin != null) {
+      setGlobalMode("kelvin");
+      setGlobalKelvin(scene.globalKelvin);
+      setGlobalColorValue(DEFAULT_COLOR);
+    } else {
+      setGlobalMode("none");
+      setGlobalColorValue(DEFAULT_COLOR);
+      setGlobalKelvin(4000);
+    }
 
-    // Detect if all included on-devices share the same kelvin.
-    const kelvins = Object.values(devs).filter((s) => s.on && !s.color && s.kelvin).map((s) => s.kelvin!);
-    const allSameTemp = kelvins.length > 0 && kelvins.every((k) => k === kelvins[0]);
-    setGlobalTemp(allSameTemp && !allSameColor);
-    setGlobalKelvin(allSameTemp ? kelvins[0] : 4000);
-    setGlobalBrightness(
-      allSameTemp
-        ? (Object.values(devs).find((s) => s.on && !s.color)?.brightness ?? 0.8)
-        : 0.8
-    );
+    // Capture current light states to restore on exit. Editing never activates the scene.
+    const captured: Record<string, DeviceState> = {};
+    for (const id of Object.keys(devs)) {
+      captured[id] = captureDeviceState(deviceOn, brightness, kelvin, color, id);
+    }
+    setPreEditLightStates(captured);
+
+    // Apply scene to lights immediately for live preview (no ActivateScene).
+    lightActions.previewSceneStates(devs);
   };
 
-  const cancelEdit = () => { setEditing(null); setCreating(false); };
+  const exitEdit = useCallback(async (restoreLights: boolean) => {
+    if (restoreLights && Object.keys(preEditLightStates).length > 0) {
+      await lightActions.restoreLightStates(preEditLightStates, devices);
+    }
+    setEditing(null);
+    setCreating(false);
+    setPreEditLightStates({});
+  }, [preEditLightStates, devices]);
+
+  const cancelEdit = async () => {
+    try {
+      await exitEdit(true);
+    } catch (e) {
+      console.error("Failed to restore light states on cancel:", e);
+    }
+  };
 
   const toggleDeviceInScene = (deviceId: string) => {
     setNewDevices((prev) => {
@@ -221,6 +186,13 @@ export function Scenes() {
       }
       return { ...prev, [deviceId]: { on: true, brightness: 0.8 } };
     });
+    // When adding a device in create mode, capture its current state for restore on exit.
+    if (creating && !newDevices[deviceId] && !preEditLightStates[deviceId]) {
+      setPreEditLightStates((p) => ({
+        ...p,
+        [deviceId]: captureDeviceState(deviceOn, brightness, kelvin, color, deviceId),
+      }));
+    }
   };
 
   const updateDeviceState = (deviceId: string, updates: Partial<DeviceState>) => {
@@ -263,27 +235,45 @@ export function Scenes() {
     if (!newName.trim()) return;
     const finalDevices = { ...newDevices };
 
-    if (globalColor) {
+    if (globalMode === "color") {
       for (const id of Object.keys(finalDevices)) {
         if (finalDevices[id].on) {
           const dev = devices.find((d) => d.id === id);
           if (dev?.supportsColor) {
-            finalDevices[id] = { ...finalDevices[id], color: globalColorValue, kelvin: undefined };
+            // RGB device: preserve per-device brightness, override hue + saturation.
+            finalDevices[id] = {
+              ...finalDevices[id],
+              color: { ...globalColorValue, b: finalDevices[id].brightness },
+              kelvin: undefined,
+            };
+          } else if (dev?.supportsKelvin) {
+            // Kelvin-only device: extrapolate CCT from the selected hue.
+            const k = Math.max(
+              dev.minKelvin ?? 2000,
+              Math.min(dev.maxKelvin ?? 9000, hueToKelvin(globalColorValue.h))
+            );
+            finalDevices[id] = { ...finalDevices[id], kelvin: k, color: undefined };
           }
         }
       }
-    } else if (globalTemp) {
+    } else if (globalMode === "kelvin") {
       for (const id of Object.keys(finalDevices)) {
         if (finalDevices[id].on) {
+          // Preserve individual brightness; only override kelvin.
           finalDevices[id] = {
             ...finalDevices[id],
             kelvin: globalKelvin,
-            brightness: globalBrightness,
             color: undefined,
           };
         }
       }
     }
+
+    const globalOverride = globalMode === "color"
+      ? { globalColor: globalColorValue, globalKelvin: undefined }
+      : globalMode === "kelvin"
+      ? { globalColor: undefined, globalKelvin: globalKelvin }
+      : { globalColor: undefined, globalKelvin: undefined };
 
     try {
       if (editing) {
@@ -293,6 +283,7 @@ export function Scenes() {
             name: newName,
             trigger: newTrigger,
             devices: toModelDevices(finalDevices),
+            ...globalOverride,
           })
         );
       } else {
@@ -301,10 +292,11 @@ export function Scenes() {
             name: newName,
             trigger: newTrigger,
             devices: toModelDevices(finalDevices),
+            ...globalOverride,
           })
         );
       }
-      cancelEdit();
+      await exitEdit(false);
       refresh();
     } catch (e) {
       console.error("Failed to save scene:", e);
@@ -317,8 +309,7 @@ export function Scenes() {
 
   const handleActivate = async (id: string) => {
     const scene = scenes.find((s) => s.id === id);
-    if (scene?.devices) lightActions.applySceneStates(scene.devices);
-    setActiveScene(id);
+    if (scene) lightActions.setActiveSceneOptimistic(scene);
     try {
       await ActivateScene(id);
     } catch (e) {
@@ -327,17 +318,55 @@ export function Scenes() {
     }
   };
 
-  const handleSetGlobalColor = (val: boolean) => {
-    setGlobalColor(val);
-    if (val) setGlobalTemp(false);
-  };
-
-  const handleSetGlobalTemp = (val: boolean) => {
-    setGlobalTemp(val);
-    if (val) setGlobalColor(false);
-  };
-
   const anyDeviceSupportsColor = devices.some((d) => d.supportsColor);
+  const anyDeviceSupportsKelvin = devices.some((d) => d.supportsKelvin);
+
+  // Triggers already claimed by another scene (excluding the one currently being edited).
+  const takenTriggers = useMemo(() => {
+    const editingId = editing?.id;
+    return new Set(
+      scenes
+        .filter((s) => s.trigger && s.id !== editingId)
+        .map((s) => s.trigger)
+    );
+  }, [scenes, editing]);
+
+  /** Push a global color value to all currently included+on devices for live preview.
+   *  RGB-capable devices receive the full colour; kelvin-only devices get an
+   *  approximated correlated colour temperature derived from the hue. */
+  function previewGlobalColor(c: Color) {
+    Object.entries(newDevices).forEach(([id, state]) => {
+      if (!state.on) return;
+      const dev = devices.find((d) => d.id === id);
+      if (!dev) return;
+      if (dev.supportsColor) {
+        lightActions.setColor(id, { ...c, b: state.brightness });
+      } else if (dev.supportsKelvin) {
+        const k = Math.max(
+          dev.minKelvin ?? 2000,
+          Math.min(dev.maxKelvin ?? 9000, hueToKelvin(c.h))
+        );
+        lightActions.setTemperature(id, k, state.brightness);
+      }
+    });
+  }
+  function previewGlobalKelvin(k: number) {
+    Object.entries(newDevices).forEach(([id, state]) => {
+      if (!state.on) return;
+      const dev = devices.find((d) => d.id === id);
+      if (!dev) return;
+      if (dev.supportsKelvin) {
+        const clamped = Math.max(
+          dev.minKelvin ?? 2000,
+          Math.min(dev.maxKelvin ?? 9000, k)
+        );
+        lightActions.setTemperature(id, clamped, state.brightness);
+      } else if (dev.supportsColor) {
+        const hsb = kelvinToHSB(k);
+        lightActions.setColor(id, { ...hsb, b: state.brightness });
+      }
+    });
+  }
   const isEditing = creating || editing !== null;
 
   return (
@@ -358,7 +387,7 @@ export function Scenes() {
       </div>
 
       {isEditing && (
-        <Card className="space-y-6">
+        <Card className="space-y-6 bg-secondary">
           <div className="flex items-center justify-between">
             <h3 className="text-lg font-semibold">
               {creating ? "Create Scene" : "Edit Scene"}
@@ -377,7 +406,7 @@ export function Scenes() {
                 value={newName}
                 onChange={(e) => setNewName(e.target.value)}
                 placeholder="e.g., On Air, Meeting, Off Duty"
-                className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+                className="w-full rounded-lg bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
               />
             </div>
 
@@ -386,95 +415,100 @@ export function Scenes() {
               <label className="text-sm font-medium mb-1.5 block">Trigger</label>
               <div className="flex gap-3">
                 <button
-                  onClick={() => setNewTrigger("camera_on")}
-                  className={`flex-1 flex items-center justify-center gap-2 rounded-lg border p-3 text-sm transition-colors ${
-                    newTrigger === "camera_on"
-                      ? "border-primary bg-primary/10 text-primary"
-                      : "border-border hover:bg-secondary"
+                  onClick={() => setNewTrigger("")}
+                  className={`flex-1 flex items-center justify-center gap-2 rounded-lg p-3 text-sm transition-colors ${
+                    newTrigger === ""
+                      ? "bg-primary/10 text-primary"
+                      : "hover:bg-secondary text-muted-foreground"
                   }`}
                 >
-                  <Camera className="h-4 w-4" />
-                  Camera On
+                  <Play className="h-4 w-4" />
+                  Manual Only
                 </button>
-                <button
-                  onClick={() => setNewTrigger("camera_off")}
-                  className={`flex-1 flex items-center justify-center gap-2 rounded-lg border p-3 text-sm transition-colors ${
-                    newTrigger === "camera_off"
-                      ? "border-primary bg-primary/10 text-primary"
-                      : "border-border hover:bg-secondary"
-                  }`}
-                >
-                  <CameraOff className="h-4 w-4" />
-                  Camera Off
-                </button>
+                {(["camera_on", "camera_off"] as const).map((t) => {
+                  const taken = takenTriggers.has(t);
+                  const Icon = t === "camera_on" ? Camera : CameraOff;
+                  const label = t === "camera_on" ? "Camera On" : "Camera Off";
+                  return (
+                    <button
+                      key={t}
+                      onClick={() => !taken && setNewTrigger(t)}
+                      disabled={taken}
+                      title={taken ? "Already used by another scene" : undefined}
+                      className={`flex-1 flex items-center justify-center gap-2 rounded-lg p-3 text-sm transition-colors ${
+                        newTrigger === t
+                          ? "bg-primary/10 text-primary"
+                          : taken
+                          ? "opacity-40 cursor-not-allowed text-muted-foreground"
+                          : "hover:bg-secondary text-muted-foreground"
+                      }`}
+                    >
+                      <Icon className="h-4 w-4" />
+                      {label}
+                    </button>
+                  );
+                })}
               </div>
             </div>
 
-            {/* Global Color */}
-            {anyDeviceSupportsColor && (
-              <div className="rounded-lg border border-border p-4 space-y-3">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <Palette className="h-4 w-4 text-muted-foreground" />
-                    <div>
-                      <p className="text-sm font-medium">Global Color</p>
-                      <p className="text-xs text-muted-foreground">
-                        {globalColor
-                          ? "Same color for all color-capable lights"
-                          : "Set color per light individually"}
-                      </p>
-                    </div>
-                  </div>
-                  <Toggle checked={globalColor} onChange={handleSetGlobalColor} />
+            {/* Global Override */}
+            {(anyDeviceSupportsColor || anyDeviceSupportsKelvin) && (
+              <div className="bg-card rounded-xl p-4 space-y-4">
+                <div className="flex items-center gap-2">
+                  <Palette className="h-4 w-4 text-muted-foreground" />
+                  <p className="text-sm font-medium">Global Colors</p>
+                  <p className="text-xs text-muted-foreground ml-1">— applies the same color or temperature to all lights</p>
                 </div>
-                {globalColor && (
-                  <div className="pt-1 flex items-center gap-3">
-                    <label className="text-xs text-muted-foreground flex items-center gap-2">
-                      <ColorSwatch color={globalColorValue} />
-                      Color
-                    </label>
-                    <ColorPicker value={globalColorValue} onChange={setGlobalColorValue} />
-                    <span className="text-xs text-muted-foreground">
-                      {Math.round(globalColorValue.b * 100)}% brightness
-                    </span>
+
+                {/* Mode tabs */}
+                <SegmentedControl<GlobalMode>
+                  options={[
+                    { value: "none", label: "Off" },
+                    ...(anyDeviceSupportsColor
+                      ? [{ value: "color" as const, label: "Color" }]
+                      : []),
+                    ...(anyDeviceSupportsKelvin
+                      ? [{ value: "kelvin" as const, label: "Temperature" }]
+                      : []),
+                  ]}
+                  value={globalMode}
+                  onChange={(mode) => {
+                    setGlobalMode(mode);
+                    if (mode === "color") previewGlobalColor(globalColorValue);
+                    if (mode === "kelvin") previewGlobalKelvin(globalKelvin);
+                  }}
+                />
+
+                {globalMode === "color" && (
+                  <div className="flex flex-col items-center gap-2">
+                    <ColorWheel
+                      color={globalColorValue}
+                      brightness={100}
+                      onChange={(c) => {
+                        setGlobalColorValue(c);
+                        previewGlobalColor(c);
+                      }}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      {Math.round(globalColorValue.h)}°&thinsp;hue · {Math.round(globalColorValue.s * 100)}%&thinsp;sat
+                    </p>
+                  </div>
+                )}
+
+                {globalMode === "kelvin" && (
+                  <div className="flex flex-col items-center gap-1">
+                    <KelvinSlider
+                      kelvin={globalKelvin}
+                      onChange={(k) => {
+                        setGlobalKelvin(k);
+                        previewGlobalKelvin(k);
+                      }}
+                    />
+                    <p className="text-center text-xs text-muted-foreground">{globalKelvin}K</p>
                   </div>
                 )}
               </div>
             )}
-
-            {/* Global Temperature */}
-            <div className="rounded-lg border border-border p-4 space-y-3">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <Thermometer className="h-4 w-4 text-muted-foreground" />
-                  <div>
-                    <p className="text-sm font-medium">Global Temperature</p>
-                    <p className="text-xs text-muted-foreground">
-                      {globalTemp
-                        ? "Same temperature for all lights"
-                        : "Set temperature per light individually"}
-                    </p>
-                  </div>
-                </div>
-                <Toggle checked={globalTemp} onChange={handleSetGlobalTemp} />
-              </div>
-              {globalTemp && (
-                <div className="pt-1 flex items-center gap-3">
-                  <label className="text-xs text-muted-foreground flex items-center gap-2">
-                    <TempSwatch kelvin={globalKelvin} />
-                    Temp
-                  </label>
-                  <TemperaturePicker
-                    kelvin={globalKelvin}
-                    brightness={globalBrightness}
-                    onChange={(k, b) => { setGlobalKelvin(k); setGlobalBrightness(b); }}
-                  />
-                  <span className="text-xs text-muted-foreground">
-                    {globalKelvin}K · {Math.round(globalBrightness * 100)}%
-                  </span>
-                </div>
-              )}
-            </div>
 
             {/* Per-device list */}
             <div>
@@ -486,7 +520,7 @@ export function Scenes() {
               ) : (
                 <div className="space-y-5">
                   {Object.entries(groupByBrand(devices)).map(([brand, brandDevices]) => {
-                    const info = brandInfo[brand] || { color: "text-foreground", label: brand };
+                    const info = getBrandInfo(brand);
                     return (
                       <div key={brand}>
                         <div className="flex items-center gap-2 mb-2">
@@ -499,103 +533,100 @@ export function Scenes() {
                           {brandDevices.map((device) => {
                             const included = !!newDevices[device.id];
                             const devState = newDevices[device.id];
-                            const hasBoth = device.supportsColor && device.supportsKelvin;
                             const devMode = getDeviceMode(device.id);
-                            const globalOverride = globalColor || globalTemp;
+
+                            // When a global override is active, pass the global values
+                            // to the card so it reflects the live preview color.
+                            // For kelvin-only devices under a global color override, derive
+                            // the equivalent Kelvin temperature from the hue instead.
+                            const isKelvinOnly = device.supportsKelvin && !device.supportsColor;
+                            const derivedKelvin = isKelvinOnly && globalMode === "color"
+                              ? Math.min(
+                                  device.maxKelvin ?? 9000,
+                                  Math.max(device.minKelvin ?? 2000, hueToKelvin(globalColorValue.h))
+                                )
+                              : undefined;
+
+                            const displayColor =
+                              globalMode === "color" && !isKelvinOnly ? globalColorValue
+                              : globalMode === "kelvin" ? undefined
+                              : devState?.color;
+                            const displayKelvin =
+                              derivedKelvin ??
+                              (globalMode === "kelvin" ? globalKelvin : (devState?.kelvin ?? 4000));
+                            const displayMode: LightMode =
+                              globalMode === "color" && isKelvinOnly ? "kelvin"
+                              : globalMode === "color" ? "color"
+                              : globalMode === "kelvin" ? "kelvin"
+                              : devMode;
+
+                            if (!included) {
+                              return (
+                                <button
+                                  key={device.id}
+                                  type="button"
+                                  onClick={() => toggleDeviceInScene(device.id)}
+                                  className="flex items-center gap-3 rounded-xl bg-card/60 px-4 py-3 text-sm text-muted-foreground hover:text-foreground hover:bg-card transition-all w-full opacity-50 hover:opacity-100"
+                                >
+                                  <div className="h-10 w-10 rounded-full bg-white/5 flex items-center justify-center shrink-0">
+                                    <Lightbulb className="h-5 w-5" />
+                                  </div>
+                                  <span className="flex-1 text-left font-medium">{device.name}</span>
+                                  <Plus className="h-4 w-4 shrink-0" />
+                                </button>
+                              );
+                            }
 
                             return (
-                              <div
-                                key={device.id}
-                                className={`rounded-lg border p-4 transition-colors ${
-                                  included ? "border-primary/40 bg-primary/5" : "border-border"
-                                }`}
-                              >
-                                <div className="flex items-center justify-between">
-                                  <div className="flex items-center gap-3">
-                                    <Toggle
-                                      checked={included}
-                                      onChange={() => toggleDeviceInScene(device.id)}
-                                    />
-                                    <p className="text-sm font-medium">{device.name}</p>
-                                  </div>
-                                  {included && (
-                                    <RockerSwitch
-                                      checked={devState?.on ?? true}
-                                      onChange={(on) => updateDeviceState(device.id, { on })}
-                                      color={deviceSceneColor(devState)}
-                                    />
-                                  )}
-                                </div>
-
-                                {included && devState?.on && (
-                                  <div className="mt-3 pl-14 space-y-3">
-                                    {/* Mode toggle — only for devices with both, when not in global override */}
-                                    {hasBoth && !globalOverride && (
-                                      <ModeToggle
-                                        mode={devMode}
-                                        onSwitch={(m) => switchDeviceMode(device.id, m)}
-                                      />
-                                    )}
-
-                                    {/* Color picker */}
-                                    {device.supportsColor && !globalColor && devMode === "color" && (
-                                      <div className="flex items-center gap-3">
-                                        <label className="text-xs text-muted-foreground w-10 shrink-0">
-                                          Color
-                                        </label>
-                                        <ColorPicker
-                                          value={devState?.color ?? null}
-                                          onChange={(c) =>
-                                            updateDeviceState(device.id, {
-                                              color: c,
-                                              brightness: c.b,
-                                              kelvin: undefined,
-                                            })
-                                          }
-                                        />
-                                        {devState?.color && (
-                                          <span className="text-xs text-muted-foreground">
-                                            {Math.round(devState.color.b * 100)}%
-                                          </span>
-                                        )}
-                                      </div>
-                                    )}
-
-                                    {/* Temperature picker */}
-                                    {device.supportsKelvin && !globalTemp && !globalColor && devMode === "kelvin" && (
-                                      <div className="flex items-center gap-3">
-                                        <label className="text-xs text-muted-foreground w-10 shrink-0">
-                                          Temp
-                                        </label>
-                                        <TemperaturePicker
-                                          kelvin={devState?.kelvin ?? 4000}
-                                          brightness={devState?.brightness ?? 0.8}
-                                          minBrightness={device.brand === "elgato" ? 0.03 : 0}
-                                          minKelvin={device.minKelvin ? device.minKelvin : undefined}
-                                          maxKelvin={device.maxKelvin ? device.maxKelvin : undefined}
-                                          kelvinStep={device.kelvinStep && device.kelvinStep > 1 ? device.kelvinStep : 1}
-                                          onChange={(k, b) =>
-                                            updateDeviceState(device.id, {
-                                              kelvin: k,
-                                              brightness: b,
-                                              color: undefined,
-                                            })
-                                          }
-                                        />
-                                        <span className="text-xs text-muted-foreground">
-                                          {devState?.kelvin ?? 4000}K
-                                        </span>
-                                      </div>
-                                    )}
-
-                                    {/* Brightness slider — only for color-only mode when not using iro */}
-                                    {!devState?.color && devMode !== "kelvin" && device.supportsColor && !globalColor && (
-                                      <div className="text-xs text-muted-foreground">
-                                        Pick a color above to set brightness.
-                                      </div>
-                                    )}
-                                  </div>
-                                )}
+                              <div key={device.id} className="relative group/scenecard">
+                                <LightCard
+                                  device={device}
+                                  on={devState?.on ?? true}
+                                  brightness={Math.round((devState?.brightness ?? 0.8) * 100)}
+                                  kelvin={displayKelvin}
+                                  color={displayColor}
+                                  mode={displayMode}
+                                  colorLocked={globalMode !== "none"}
+                                  onToggle={(on) => {
+                                    updateDeviceState(device.id, { on });
+                                    lightActions.toggleLight(device.id, on);
+                                  }}
+                                  onBrightness={(value) => {
+                                    const k = newDevices[device.id]?.kelvin;
+                                    updateDeviceState(device.id, { brightness: value / 100 });
+                                    if (k) {
+                                      lightActions.setTemperature(device.id, k, value / 100);
+                                    } else {
+                                      lightActions.setBrightness(device.id, value);
+                                    }
+                                  }}
+                                  onModeSwitch={(m) => switchDeviceMode(device.id, m)}
+                                  onKelvin={(k) => {
+                                    updateDeviceState(device.id, { kelvin: k, color: undefined });
+                                    lightActions.setTemperature(
+                                      device.id,
+                                      k,
+                                      newDevices[device.id]?.brightness ?? 0.8
+                                    );
+                                  }}
+                                  onColor={(c) => {
+                                    updateDeviceState(device.id, {
+                                      color: c,
+                                      brightness: c.b,
+                                      kelvin: undefined,
+                                    });
+                                    lightActions.setColor(device.id, c);
+                                  }}
+                                />
+                                {/* Remove from scene — appears on hover */}
+                                <button
+                                  type="button"
+                                  title="Remove from scene"
+                                  onClick={() => toggleDeviceInScene(device.id)}
+                                  className="absolute -top-1.5 -right-1.5 z-30 h-5 w-5 rounded-full bg-card border border-border shadow-sm flex items-center justify-center opacity-0 group-hover/scenecard:opacity-100 transition-opacity"
+                                >
+                                  <X className="h-3 w-3 text-muted-foreground" />
+                                </button>
                               </div>
                             );
                           })}
@@ -610,7 +641,7 @@ export function Scenes() {
 
           <div className="flex justify-end gap-3 pt-2">
             <Button variant="outline" onClick={cancelEdit}>Cancel</Button>
-            <Button onClick={handleSave} disabled={!newName.trim()}>
+            <Button onClick={handleSave} disabled={!newName.trim() || !isDirty}>
               <Check className="h-4 w-4" />
               {creating ? "Create Scene" : "Save Changes"}
             </Button>
@@ -634,46 +665,14 @@ export function Scenes() {
 
       {!isEditing &&
         scenes.map((scene) => (
-          <Card key={scene.id} className="p-4">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <div
-                  className={`h-10 w-10 rounded-lg flex items-center justify-center ${
-                    scene.trigger === "camera_on" ? "bg-success/20" : "bg-muted"
-                  }`}
-                >
-                  {scene.trigger === "camera_on" ? (
-                    <Camera className="h-5 w-5 text-success" />
-                  ) : (
-                    <CameraOff className="h-5 w-5 text-muted-foreground" />
-                  )}
-                </div>
-                <div>
-                  <div className="flex items-center gap-2">
-                    <p className="font-semibold">{scene.name}</p>
-                    {activeScene === scene.id && (
-                      <Badge variant="success">Active</Badge>
-                    )}
-                  </div>
-                  <p className="text-xs text-muted-foreground">
-                    Trigger: {scene.trigger === "camera_on" ? "Camera On" : "Camera Off"}{" "}
-                    · {Object.keys(scene.devices || {}).length} light(s)
-                  </p>
-                </div>
-              </div>
-              <div className="flex gap-1">
-                <Button variant="ghost" size="icon" onClick={() => handleActivate(scene.id)} title="Activate">
-                  <Play className="h-4 w-4 text-primary" />
-                </Button>
-                <Button variant="ghost" size="icon" onClick={() => startEdit(scene)} title="Edit">
-                  <Pencil className="h-4 w-4" />
-                </Button>
-                <Button variant="ghost" size="icon" onClick={() => handleDelete(scene.id)} title="Delete">
-                  <Trash2 className="h-4 w-4 text-destructive" />
-                </Button>
-              </div>
-            </div>
-          </Card>
+          <SceneRow
+            key={scene.id}
+            scene={scene}
+            isActive={activeSceneId === scene.id}
+            onActivate={() => handleActivate(scene.id)}
+            onEdit={() => startEdit(scene)}
+            onDelete={() => handleDelete(scene.id)}
+          />
         ))}
     </div>
   );

@@ -16,7 +16,7 @@ type Manager struct {
 	store        *store.Store
 	lightManager *lights.Manager
 	activeScene  string
-	onChange      func(sceneID string)
+	onChange      func(scene store.Scene)
 }
 
 func NewManager(s *store.Store, lm *lights.Manager) *Manager {
@@ -26,7 +26,7 @@ func NewManager(s *store.Store, lm *lights.Manager) *Manager {
 	}
 }
 
-func (m *Manager) OnChange(fn func(sceneID string)) {
+func (m *Manager) OnChange(fn func(scene store.Scene)) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.onChange = fn
@@ -45,12 +45,30 @@ func (m *Manager) GetScene(id string) (store.Scene, error) {
 	return store.Scene{}, fmt.Errorf("scene %s not found", id)
 }
 
-func (m *Manager) CreateScene(name, trigger string, devices map[string]lights.DeviceState) (store.Scene, error) {
+func (m *Manager) triggerInUse(trigger, excludeID string) bool {
+	if trigger == "" {
+		return false
+	}
+	for _, s := range m.store.GetScenes() {
+		if s.ID != excludeID && s.Trigger == trigger {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *Manager) CreateScene(name, trigger string, devices map[string]lights.DeviceState, globalColor *lights.Color, globalKelvin *int) (store.Scene, error) {
+	if m.triggerInUse(trigger, "") {
+		return store.Scene{}, fmt.Errorf("trigger %q is already used by another scene", trigger)
+	}
+
 	scene := store.Scene{
-		ID:      uuid.New().String(),
-		Name:    name,
-		Trigger: trigger,
-		Devices: devices,
+		ID:           uuid.New().String(),
+		Name:         name,
+		Trigger:      trigger,
+		Devices:      devices,
+		GlobalColor:  globalColor,
+		GlobalKelvin: globalKelvin,
 	}
 
 	if err := m.store.UpsertScene(scene); err != nil {
@@ -61,6 +79,9 @@ func (m *Manager) CreateScene(name, trigger string, devices map[string]lights.De
 }
 
 func (m *Manager) UpdateScene(scene store.Scene) error {
+	if m.triggerInUse(scene.Trigger, scene.ID) {
+		return fmt.Errorf("trigger %q is already used by another scene", scene.Trigger)
+	}
 	return m.store.UpsertScene(scene)
 }
 
@@ -80,19 +101,22 @@ func (m *Manager) ActivateScene(ctx context.Context, id string) error {
 		return err
 	}
 
-	for deviceID, state := range scene.Devices {
-		if err := m.lightManager.SetDeviceState(ctx, deviceID, state); err != nil {
-			continue
-		}
-	}
-
+	// Emit scene:active immediately so the UI updates in one coherent step.
+	// Device state changes run afterward; the frontend applies preset states
+	// optimistically when it receives scene:active.
 	m.mu.Lock()
 	m.activeScene = id
 	fn := m.onChange
 	m.mu.Unlock()
 
 	if fn != nil {
-		fn(id)
+		fn(scene)
+	}
+
+	for deviceID, state := range scene.Devices {
+		if err := m.lightManager.SetDeviceState(ctx, deviceID, state); err != nil {
+			continue
+		}
 	}
 
 	return nil

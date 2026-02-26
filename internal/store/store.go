@@ -15,6 +15,10 @@ type Scene struct {
 	Name    string                        `json:"name"`
 	Trigger string                        `json:"trigger"`
 	Devices map[string]lights.DeviceState `json:"devices"`
+	// GlobalColor/GlobalKelvin persist the editor's global override so it can
+	// be restored when the scene is re-opened for editing.
+	GlobalColor  *lights.Color `json:"globalColor,omitempty"`
+	GlobalKelvin *int          `json:"globalKelvin,omitempty"`
 }
 
 type Settings struct {

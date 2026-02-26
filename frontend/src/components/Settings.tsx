@@ -218,7 +218,7 @@ export function Settings() {
         </div>
 
         {step === "scanning" && (
-          <div className="rounded-lg border border-border p-6 flex flex-col items-center gap-3">
+          <div className="rounded-lg p-6 flex flex-col items-center gap-3">
             <Loader2 className="h-6 w-6 animate-spin text-primary" />
             <p className="text-sm font-medium">Scanning network for Hue bridges...</p>
             <p className="text-xs text-muted-foreground">This may take a few seconds</p>
@@ -226,7 +226,7 @@ export function Settings() {
         )}
 
         {step === "results" && (
-          <div className="rounded-lg border border-border p-4 space-y-3">
+          <div className="rounded-lg p-4 space-y-3">
             {discovered.length === 0 ? (
               <div className="text-center py-4 space-y-2">
                 <Search className="h-6 w-6 mx-auto text-muted-foreground" />
@@ -244,7 +244,7 @@ export function Settings() {
                   {discovered.map((b) => (
                     <div
                       key={b.ip}
-                      className="flex items-center justify-between rounded-lg border border-border p-3"
+                      className="flex items-center justify-between rounded-lg p-3"
                     >
                       <div className="flex items-center gap-3">
                         <Wifi className="h-4 w-4 text-primary" />
@@ -278,7 +278,7 @@ export function Settings() {
         )}
 
         {step === "pairing" && (
-          <div className="rounded-lg border border-border p-6 flex flex-col items-center gap-3">
+          <div className="rounded-lg p-6 flex flex-col items-center gap-3">
             <Loader2 className="h-6 w-6 animate-spin text-primary" />
             <p className="text-sm font-medium">Press the button on your Hue bridge</p>
             <p className="text-xs text-muted-foreground">
@@ -294,7 +294,7 @@ export function Settings() {
         )}
 
         {step === "paired" && (
-          <div className="rounded-lg border border-green-500/30 bg-green-500/5 p-6 flex flex-col items-center gap-2">
+          <div className="rounded-lg bg-green-500/5 p-6 flex flex-col items-center gap-2">
             <p className="text-sm font-medium text-green-500">Bridge paired successfully!</p>
           </div>
         )}
@@ -308,7 +308,7 @@ export function Settings() {
         {bridges.map((bridge, i) => (
           <div
             key={i}
-            className="flex items-center justify-between rounded-lg border border-border p-3"
+            className="flex items-center justify-between rounded-lg p-3"
           >
             <div className="flex items-center gap-3">
               <Wifi className="h-4 w-4 text-muted-foreground" />

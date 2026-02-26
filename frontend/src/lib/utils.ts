@@ -33,29 +33,69 @@ export function hsbToCSS(h: number, s: number, b: number): string {
   return `rgb(${r}, ${g}, ${bl})`;
 }
 
-export function hsbToHex(h: number, s: number, b: number): string {
-  const [r, g, bl] = hsbToRGB(h, s, b);
-  return `#${r.toString(16).padStart(2, "0")}${g.toString(16).padStart(2, "0")}${bl.toString(16).padStart(2, "0")}`;
-}
+/**
+ * Approximates the correlated color temperature (K) for a given hue angle.
+ *
+ * Method: HSV(hue, 1, 1) → linear sRGB → CIE XYZ → xy chromaticity →
+ * McCamy (1992) CCT approximation.  McCamy's formula is accurate for colors
+ * near the Planckian locus (reds, oranges, warm whites, cool blues).  For
+ * off-locus hues (greens, magentas) it can produce extreme values; those are
+ * replaced by a perceptual cosine fallback that maps the warm-cool axis of the
+ * colour wheel (red ≈ 2000 K … cyan ≈ 9000 K) smoothly.
+ */
+export function hueToKelvin(hue: number): number {
+  // --- HSV (s=1, v=1) → sRGB ---
+  const h6 = hue / 60;
+  const i = Math.floor(h6) % 6;
+  const f = h6 - Math.floor(h6);
+  // p=0, q=1-f, t=f  (since s=1, v=1)
+  const vals: [number, number, number][] = [
+    [1, f, 0],   // case 0
+    [1 - f, 1, 0], // case 1
+    [0, 1, f],   // case 2
+    [0, 1 - f, 1], // case 3
+    [f, 0, 1],   // case 4
+    [1, 0, 1 - f], // case 5
+  ];
+  const [rs, gs, bs] = vals[i];
 
-export function hexToHSB(hex: string): { h: number; s: number; b: number } {
-  const r = parseInt(hex.slice(1, 3), 16) / 255;
-  const g = parseInt(hex.slice(3, 5), 16) / 255;
-  const b = parseInt(hex.slice(5, 7), 16) / 255;
-  const max = Math.max(r, g, b);
-  const min = Math.min(r, g, b);
-  const delta = max - min;
-  let h = 0;
-  if (delta !== 0) {
-    if (max === r) h = ((g - b) / delta) % 6;
-    else if (max === g) h = (b - r) / delta + 2;
-    else h = (r - g) / delta + 4;
-    h = (h * 60 + 360) % 360;
+  // sRGB gamma → linear light
+  const lin = (c: number) =>
+    c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+  const rl = lin(rs), gl = lin(gs), bl = lin(bs);
+
+  // linear sRGB → CIE XYZ (D65 reference white)
+  const X = 0.4124564 * rl + 0.3575761 * gl + 0.1804375 * bl;
+  const Y = 0.2126729 * rl + 0.7151522 * gl + 0.0721750 * bl;
+  const Z = 0.0193339 * rl + 0.1191920 * gl + 0.9503041 * bl;
+
+  const sum = X + Y + Z;
+  if (sum < 1e-6) return 4000;
+
+  const xc = X / sum;
+  const yc = Y / sum;
+
+  // McCamy (1992) CCT from xy chromaticity
+  const n = (xc - 0.332) / (0.1858 - yc);
+  const cct = 449 * n * n * n + 3525 * n * n + 6823.3 * n + 5520.33;
+
+  // McCamy is only reliable near the Planckian locus.
+  // Fall back to a cosine mapping on the perceptual warm-cool axis when the
+  // result lands outside the practical lighting range [1800 K, 12000 K].
+  if (cct < 1800 || cct > 12000 || !isFinite(cct)) {
+    // cos(0°)=1 at red (warmest), cos(180°)=-1 at cyan (coolest)
+    const warmth = Math.cos((hue * Math.PI) / 180);
+    return Math.round(2000 + ((1 - warmth) / 2) * 7000);
   }
-  return { h, s: max === 0 ? 0 : delta / max, b: max };
+
+  return Math.round(Math.max(2000, Math.min(9000, cct)));
 }
 
-export function kelvinToCSS(k: number): string {
+/**
+ * Converts Kelvin temperature to RGB via black-body radiation approximation.
+ * Shared by kelvinToHSB and kelvinToCSS.
+ */
+function kelvinToRGB(k: number): [number, number, number] {
   const t = k / 100;
   let r: number, g: number, b: number;
 
@@ -70,5 +110,51 @@ export function kelvinToCSS(k: number): string {
   }
 
   const clamp = (v: number) => Math.max(0, Math.min(255, Math.round(v)));
-  return `rgb(${clamp(r)}, ${clamp(g)}, ${clamp(b)})`;
+  return [clamp(r), clamp(g), clamp(b)];
+}
+
+/**
+ * Converts a Kelvin temperature to an approximate HSB colour (s=0 for whites,
+ * slight saturation for warm/cool tints). Used to preview temperature on
+ * RGB-only lights that don't support native kelvin mode.
+ */
+export function kelvinToHSB(k: number): { h: number; s: number; b: number } {
+  const [r, g, b] = kelvinToRGB(k);
+  const rn = r / 255;
+  const gn = g / 255;
+  const bn = b / 255;
+
+  const max = Math.max(rn, gn, bn);
+  const min = Math.min(rn, gn, bn);
+  const delta = max - min;
+
+  let h = 0;
+  if (delta !== 0) {
+    if (max === rn) h = ((gn - bn) / delta) % 6;
+    else if (max === gn) h = (bn - rn) / delta + 2;
+    else h = (rn - gn) / delta + 4;
+    h = (h * 60 + 360) % 360;
+  }
+
+  return { h, s: max === 0 ? 0 : delta / max, b: max };
+}
+
+export function kelvinToCSS(k: number): string {
+  const [r, g, b] = kelvinToRGB(k);
+  return `rgb(${r}, ${g}, ${b})`;
+}
+
+/**
+ * Builds a conic-gradient CSS string from an array of CSS color strings,
+ * distributing them evenly around the circle and looping back to the first
+ * color — the same style as the ColorPicker swatch wheel.
+ * Returns null when the array is empty.
+ */
+export function swatchBackground(colors: string[]): string | null {
+  if (colors.length === 0) return null;
+  if (colors.length === 1) return `conic-gradient(${colors[0]}, ${colors[0]})`;
+  const stops = [...colors, colors[0]]
+    .map((c, i) => `${c} ${Math.round((i / colors.length) * 360)}deg`)
+    .join(", ");
+  return `conic-gradient(${stops})`;
 }

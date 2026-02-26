@@ -30,11 +30,17 @@ export interface Color {
   b: number;
 }
 
+export type LightMode = "color" | "kelvin";
+
 export interface Scene {
   id: string;
   name: string;
   trigger: string;
   devices: Record<string, DeviceState>;
+  /** Persists the global color override so the editor can restore it on re-edit. */
+  globalColor?: Color;
+  /** Persists the global kelvin override so the editor can restore it on re-edit. */
+  globalKelvin?: number;
 }
 
 export interface Settings {

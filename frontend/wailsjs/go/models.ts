@@ -133,6 +133,8 @@ export namespace main {
 	    name: string;
 	    trigger: string;
 	    devices: Record<string, lights.DeviceState>;
+	    globalColor?: lights.Color;
+	    globalKelvin?: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new CreateSceneRequest(source);
@@ -143,6 +145,8 @@ export namespace main {
 	        this.name = source["name"];
 	        this.trigger = source["trigger"];
 	        this.devices = this.convertValues(source["devices"], lights.DeviceState, true);
+	        this.globalColor = this.convertValues(source["globalColor"], lights.Color);
+	        this.globalKelvin = source["globalKelvin"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -237,6 +241,8 @@ export namespace store {
 	    name: string;
 	    trigger: string;
 	    devices: Record<string, lights.DeviceState>;
+	    globalColor?: lights.Color;
+	    globalKelvin?: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new Scene(source);
@@ -248,6 +254,8 @@ export namespace store {
 	        this.name = source["name"];
 	        this.trigger = source["trigger"];
 	        this.devices = this.convertValues(source["devices"], lights.DeviceState, true);
+	        this.globalColor = this.convertValues(source["globalColor"], lights.Color);
+	        this.globalKelvin = source["globalKelvin"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
