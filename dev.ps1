@@ -116,39 +116,66 @@ function Build-App {
         return
     }
 
-    Write-Host 'Building production executable (Wails v3)...' -ForegroundColor Cyan
+    $binDir = Join-Path $PSScriptRoot 'bin'
+    $buildBinDir = Join-Path $PSScriptRoot 'build\bin'
+    if (-not (Test-Path $buildBinDir)) {
+        New-Item -ItemType Directory -Path $buildBinDir -Force | Out-Null
+    }
 
+    # ── 1. Production build (no console) ─────────────────────────────────
+    Write-Host 'Building production executable...' -ForegroundColor Cyan
     Push-Location $PSScriptRoot
     try {
         & $Wails3Exe task windows:build:production
-        if ($LASTEXITCODE -eq 0) {
-            $exe = Join-Path $PSScriptRoot 'bin\lightsync.exe'
-            if (Test-Path $exe) {
-                $size = [math]::Round((Get-Item $exe).Length / 1MB, 1)
-                Write-Host "Build complete: bin\lightsync.exe (${size} MB)" -ForegroundColor Green
-
-                # Replace old v2 binary in build/bin so shortcuts/scripts use the new build
-                $buildBinExe = Join-Path $PSScriptRoot 'build\bin\lightsync.exe'
-                $buildBinDir = Split-Path $buildBinExe
-                if (-not (Test-Path $buildBinDir)) {
-                    New-Item -ItemType Directory -Path $buildBinDir -Force | Out-Null
-                }
-                try {
-                    Copy-Item $exe $buildBinExe -Force
-                    Write-Host "Copied to build\bin\lightsync.exe" -ForegroundColor DarkGray
-                }
-                catch {
-                    Write-Host "Could not copy to build\bin (close LightSync if running): $_" -ForegroundColor Yellow
-                }
-            }
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host 'Production build failed' -ForegroundColor Red
+            return
         }
-        else {
-            Write-Host 'Build failed' -ForegroundColor Red
+        $prodExe = Join-Path $binDir 'lightsync.exe'
+        $size = [math]::Round((Get-Item $prodExe).Length / 1MB, 1)
+        Write-Host "Production build: bin\lightsync.exe (${size} MB)" -ForegroundColor Green
+
+        try {
+            Copy-Item $prodExe (Join-Path $buildBinDir 'lightsync.exe') -Force
+            Write-Host "  -> copied to build\bin\lightsync.exe" -ForegroundColor DarkGray
+        }
+        catch {
+            Write-Host "  Could not copy to build\bin (close LightSync if running): $_" -ForegroundColor Yellow
         }
     }
     finally {
         Pop-Location
     }
+
+    # ── 2. Dev build (with console) ──────────────────────────────────────
+    Write-Host 'Building dev executable (with console)...' -ForegroundColor Cyan
+    Push-Location $PSScriptRoot
+    try {
+        & $Wails3Exe task windows:build
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host 'Dev build failed' -ForegroundColor Red
+            return
+        }
+        $devExe = Join-Path $binDir 'lightsync.exe'
+        $size = [math]::Round((Get-Item $devExe).Length / 1MB, 1)
+
+        $devTarget = Join-Path $binDir 'lightsync-dev.exe'
+        Move-Item $devExe $devTarget -Force
+        Write-Host "Dev build: bin\lightsync-dev.exe (${size} MB)" -ForegroundColor Green
+
+        # Restore production exe as the default in bin/
+        try {
+            Copy-Item (Join-Path $buildBinDir 'lightsync.exe') $prodExe -Force
+        }
+        catch {
+            Write-Host "  Could not restore production exe in bin\: $_" -ForegroundColor Yellow
+        }
+    }
+    finally {
+        Pop-Location
+    }
+
+    Write-Host 'Done. Production: bin\lightsync.exe  |  Dev: bin\lightsync-dev.exe' -ForegroundColor Green
 }
 
 switch ($Action) {

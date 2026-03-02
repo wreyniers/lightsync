@@ -57,9 +57,9 @@ export function WindowPicker({ selectedHwnd, onSelect, onClose }: WindowPickerPr
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
-      <div className="bg-card border border-border rounded-xl w-[520px] max-h-[600px] flex flex-col shadow-2xl">
+      <div className="bg-card rounded-xl w-[520px] max-h-[600px] flex flex-col shadow-2xl">
         {/* Header */}
-        <div className="flex items-center justify-between p-4 border-b border-border">
+        <div className="flex items-center justify-between p-4">
           <h3 className="font-semibold">Select Window</h3>
           <div className="flex items-center gap-2">
             <Button variant="ghost" size="icon" onClick={loadWindows} title="Refresh">
@@ -72,7 +72,7 @@ export function WindowPicker({ selectedHwnd, onSelect, onClose }: WindowPickerPr
         </div>
 
         {/* Search */}
-        <div className="p-3 border-b border-border">
+        <div className="p-3">
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <input

@@ -21,7 +21,7 @@ function gridDims(n: number): [cols: number, rows: number] {
  * Shows a miniature representation of the capture area divided into the same
  * spatial grid used by the Go SpatialExtractor. Each zone is numbered to match
  * its device slot. When the engine is running, zones are live-tinted with the
- * extracted colors received from the screensync:colors event.
+ * zone-ordered colors from screensync:zoneColors (spatial_grid only).
  */
 export function SpatialGridPreview({ deviceCount }: SpatialGridPreviewProps) {
   const n = Math.max(1, deviceCount);
@@ -29,7 +29,7 @@ export function SpatialGridPreview({ deviceCount }: SpatialGridPreviewProps) {
   const [colors, setColors] = useState<Color[]>([]);
 
   useEffect(() => {
-    const off = Events.On("screensync:colors", (e) => {
+    const off = Events.On("screensync:zoneColors", (e) => {
       const incoming = e.data as Color[];
       if (Array.isArray(incoming)) setColors(incoming.slice(0, n));
     });
@@ -46,13 +46,13 @@ export function SpatialGridPreview({ deviceCount }: SpatialGridPreviewProps) {
   }
 
   return (
-    <div className="space-y-1.5">
-      <p className="text-[10px] text-muted-foreground">
+    <div className="space-y-2">
+      <p className="text-xs text-muted-foreground">
         Zone layout — {n} device{n !== 1 ? "s" : ""} ({cols}×{rows} grid)
       </p>
 
-      {/* 16:9 monitor shell */}
-      <div className="relative w-full rounded-lg overflow-hidden border border-white/10 bg-black/40"
+      {/* 16:9 monitor shell — compact preview */}
+      <div className="relative w-full max-w-[672px] rounded-xl overflow-hidden border border-white/10 bg-black/40"
         style={{ aspectRatio: "16/9" }}
       >
         <div
@@ -99,14 +99,14 @@ export function SpatialGridPreview({ deviceCount }: SpatialGridPreviewProps) {
 
         {/* "Live" badge — only shown when colors are flowing */}
         {colors.length > 0 && (
-          <div className="absolute bottom-1.5 right-2 flex items-center gap-1 text-[9px] text-white/50">
+          <div className="absolute bottom-1.5 right-2 flex items-center gap-1 text-xs text-white/50">
             <span className="h-1 w-1 rounded-full bg-success animate-pulse" />
             Live
           </div>
         )}
       </div>
 
-      <p className="text-[10px] text-muted-foreground/60">
+      <p className="text-xs text-muted-foreground/80">
         Zone N always maps to the Nth device in your device list. No reassignment occurs.
       </p>
     </div>

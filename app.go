@@ -10,6 +10,8 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"os/exec"
+	"runtime"
 	"strings"
 	"time"
 
@@ -126,6 +128,9 @@ func (a *App) ServiceStartup(ctx context.Context, _ application.ServiceOptions) 
 	a.screenSyncEngine = screensync.NewEngine(a.lightManager)
 	a.screenSyncEngine.OnColors(func(colors []lights.Color) {
 		application.Get().Event.Emit("screensync:colors", colors)
+	})
+	a.screenSyncEngine.OnZoneColors(func(colors []lights.Color) {
+		application.Get().Event.Emit("screensync:zoneColors", colors)
 	})
 	a.screenSyncEngine.OnStats(func(s screensync.Stats) {
 		application.Get().Event.Emit("screensync:stats", s)
@@ -472,6 +477,27 @@ func (a *App) IsMonitoringEnabled() bool {
 
 func (a *App) GetSettings() store.Settings {
 	return a.store.GetSettings()
+}
+
+// OpenConfigFile opens the config.json file in the system's default application.
+func (a *App) OpenConfigFile() error {
+	path := a.store.ConfigPath()
+	// Ensure the config directory and file exist so the open command succeeds
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		if err := a.store.SetSettings(a.store.GetSettings()); err != nil {
+			return fmt.Errorf("ensure config file exists: %w", err)
+		}
+	}
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "windows":
+		cmd = exec.Command("cmd", "/c", "start", "", path)
+	case "darwin":
+		cmd = exec.Command("open", path)
+	default:
+		cmd = exec.Command("xdg-open", path)
+	}
+	return cmd.Start()
 }
 
 func (a *App) UpdateSettings(settings store.Settings) error {

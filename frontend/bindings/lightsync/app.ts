@@ -161,7 +161,15 @@ export function IsMonitoringEnabled(): $CancellablePromise<boolean> {
 }
 
 /**
- * OpenLightsPopup shows the lights popup window. Created on first call.
+ * OpenConfigFile opens the config.json file in the system's default application.
+ */
+export function OpenConfigFile(): $CancellablePromise<void> {
+    return $Call.ByID(2165811885);
+}
+
+/**
+ * OpenLightsPopup shows the lights popup window. Created on first call;
+ * recreated after being closed (Wails 3 destroys the window on close).
  */
 export function OpenLightsPopup(): $CancellablePromise<void> {
     return $Call.ByID(1945892682);

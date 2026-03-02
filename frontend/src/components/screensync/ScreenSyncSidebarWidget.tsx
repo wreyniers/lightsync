@@ -90,15 +90,15 @@ export function ScreenSyncSidebarWidget() {
     fpsPercent >= 80 ? "text-success" : fpsPercent >= 50 ? "text-warning" : "text-destructive";
 
   return (
-    <div className="rounded-xl bg-primary/10 overflow-hidden">
+    <div className="rounded-xl bg-muted overflow-hidden">
       {/* Title row — matches camera/scene card style */}
       <div className="flex items-center gap-3 px-4 pt-3 pb-2">
-        <div className="h-8 w-8 shrink-0 rounded-lg bg-primary/20 flex items-center justify-center">
-          <MonitorPlay className="h-4 w-4 text-primary" />
+        <div className="h-8 w-8 shrink-0 rounded-xl bg-background/40 flex items-center justify-center">
+          <MonitorPlay className="h-4 w-4 text-muted-foreground" />
         </div>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-1.5">
-            <p className="text-sm font-semibold text-primary leading-tight">Screen Sync</p>
+            <p className="text-sm font-semibold text-foreground leading-tight">Screen Sync</p>
             <span className="h-1.5 w-1.5 rounded-full bg-success animate-pulse shrink-0" />
           </div>
           <p className="text-xs text-muted-foreground mt-0.5 truncate">
@@ -109,14 +109,11 @@ export function ScreenSyncSidebarWidget() {
           type="button"
           onClick={openLightsPopup}
           title="Open lights panel"
-          className="shrink-0 h-7 w-7 rounded-lg flex items-center justify-center text-muted-foreground hover:text-primary hover:bg-primary/20 transition-colors"
+          className="shrink-0 h-7 w-7 rounded-xl flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-background/40 transition-colors"
         >
           <Lightbulb className="h-3.5 w-3.5" />
         </button>
       </div>
-
-      {/* Divider */}
-      <div className="mx-4 h-px bg-primary/10" />
 
       <div className="px-4 pb-3 pt-2.5 space-y-2.5">
         {/* Live color circles */}

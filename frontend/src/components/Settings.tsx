@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { Info, Plus, Search, Loader2, Wifi, Rss, CheckCircle2, X, Lightbulb, Trash2 } from "lucide-react";
+import { Info, Plus, Search, Loader2, Wifi, Rss, CheckCircle2, X, Lightbulb, Trash2, FileJson } from "lucide-react";
 import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { Toggle } from "@/components/ui/Toggle";
@@ -85,6 +85,7 @@ export function Settings() {
     launchAtLogin: false,
   });
   const [bridges, setBridges] = useState<HueBridgeInfo[]>([]);
+  const [webcamMonitoring, setWebcamMonitoring] = useState(true);
   const isInitialLoad = useRef(true);
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -95,6 +96,15 @@ export function Settings() {
   const [scanPhase, setScanPhase] = useState("");
   const [foundDevices, setFoundDevices] = useState<Device[]>([]);
   const scanCleanupRef = useRef<(() => void) | null>(null);
+
+  useEffect(() => {
+    App.IsMonitoringEnabled().then(setWebcamMonitoring).catch(() => {});
+  }, []);
+
+  const handleToggleWebcamMonitoring = (enabled: boolean) => {
+    App.SetMonitoringEnabled(enabled);
+    setWebcamMonitoring(enabled);
+  };
 
   const dismissScan = useCallback(() => {
     setShowScanCard(false);
@@ -259,73 +269,77 @@ export function Settings() {
       </div>
 
       <Card className="space-y-6">
-        <h3 className="text-lg font-semibold">Monitoring</h3>
+        <h3 className="text-lg font-semibold">Discover Lights</h3>
 
-        <div>
-          <label className="text-sm font-medium mb-1 block">
-            Webcam Poll Interval: {settings.pollIntervalMs}ms
-          </label>
-          <p className="text-xs text-muted-foreground mb-3">
-            How often LightSync checks if your camera is active. Lower values
-            are more responsive but use slightly more CPU.
+        <div className="flex items-center justify-between">
+          <p className="text-sm text-muted-foreground">
+            Scan your local network to find LIFX, Hue, Elgato, and Govee lights.
           </p>
-          <Slider
-            value={settings.pollIntervalMs}
-            min={250}
-            max={5000}
-            step={250}
-            onChange={(v) =>
-              setSettings((s) => ({ ...s, pollIntervalMs: v }))
-            }
-          />
-          <div className="flex justify-between text-xs text-muted-foreground mt-1">
-            <span>250ms (fast)</span>
-            <span>5000ms (slow)</span>
+          <Button onClick={handleLightScan} disabled={scanning}>
+            {scanning ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Rss className="h-4 w-4" />
+            )}
+            {scanning ? "Scanning…" : "Scan Network"}
+          </Button>
+        </div>
+
+        <AddElgatoByIPFallback />
+
+        {showScanCard && (
+          <div className="rounded-lg bg-background/50 border border-border p-4 space-y-3">
+            <div className="flex items-center gap-3">
+              {scanPhase === "done" ? (
+                <CheckCircle2 className="h-5 w-5 text-green-500 shrink-0" />
+              ) : (
+                <Loader2 className="h-5 w-5 animate-spin text-primary shrink-0" />
+              )}
+              <p className="text-sm font-medium flex-1">{scanMessage}</p>
+              {!scanning && (
+                <button
+                  type="button"
+                  onClick={dismissScan}
+                  className="text-muted-foreground hover:text-foreground transition-colors"
+                  aria-label="Dismiss"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              )}
+            </div>
+            {foundDevices.length > 0 && (
+              <div className="space-y-1.5 pt-1">
+                <p className="text-xs text-muted-foreground font-medium">
+                  Discovered lights
+                </p>
+                {foundDevices.map((d) => {
+                  const info = getBrandInfo(d.brand);
+                  return (
+                    <div
+                      key={d.id}
+                      className="flex items-center gap-2 text-sm animate-in fade-in slide-in-from-left-2 duration-300"
+                    >
+                      <Lightbulb className={`h-3.5 w-3.5 shrink-0 ${info.color}`} />
+                      <span>{d.name}</span>
+                      <span className="text-xs text-muted-foreground">{info.label}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
-        </div>
+        )}
 
-        <div className="flex items-center justify-between">
-          <div>
-            <p className="text-sm font-medium">Start Minimized</p>
-            <p className="text-xs text-muted-foreground">
-              Start LightSync minimized to system tray
-            </p>
+        <div className="pt-2">
+          <div className="flex items-center justify-between mb-3">
+            <h4 className="text-base font-semibold">Hue Bridges</h4>
+            {step === "idle" && (
+              <Button variant="outline" size="sm" onClick={handleScan}>
+                <Plus className="h-4 w-4" />
+                Add Bridge
+              </Button>
+            )}
           </div>
-          <Toggle
-            checked={settings.startMinimized}
-            onChange={(v) =>
-              setSettings((s) => ({ ...s, startMinimized: v }))
-            }
-          />
-        </div>
-
-        <div className="flex items-center justify-between">
-          <div>
-            <p className="text-sm font-medium">Launch at Login</p>
-            <p className="text-xs text-muted-foreground">
-              Automatically start LightSync when you log in
-            </p>
-          </div>
-          <Toggle
-            checked={settings.launchAtLogin}
-            onChange={(v) =>
-              setSettings((s) => ({ ...s, launchAtLogin: v }))
-            }
-          />
-        </div>
-
-      </Card>
-
-      <Card className="space-y-6">
-        <div className="flex items-center justify-between">
-          <h3 className="text-lg font-semibold">Hue Bridges</h3>
-          {step === "idle" && (
-            <Button variant="outline" size="sm" onClick={handleScan}>
-              <Plus className="h-4 w-4" />
-              Add Bridge
-            </Button>
-          )}
-        </div>
 
         {step === "scanning" && (
           <div className="rounded-lg p-6 flex flex-col items-center gap-3">
@@ -446,68 +460,78 @@ export function Settings() {
             </button>
           </div>
         ))}
+        </div>
       </Card>
 
-      <Card className="space-y-4">
+      <Card className="space-y-6">
+        <h3 className="text-lg font-semibold">Monitoring</h3>
+
         <div className="flex items-center justify-between">
-          <h3 className="text-lg font-semibold">Discover Lights</h3>
-          <Button onClick={handleLightScan} disabled={scanning}>
-            {scanning ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <Rss className="h-4 w-4" />
-            )}
-            {scanning ? "Scanning…" : "Scan Network"}
-          </Button>
-        </div>
-        <p className="text-sm text-muted-foreground">
-          Scan your local network to find LIFX, Hue, Elgato, and Govee lights.
-        </p>
-
-        <AddElgatoByIPFallback />
-
-        {showScanCard && (
-          <div className="rounded-lg bg-background/50 border border-border p-4 space-y-3">
-            <div className="flex items-center gap-3">
-              {scanPhase === "done" ? (
-                <CheckCircle2 className="h-5 w-5 text-green-500 shrink-0" />
-              ) : (
-                <Loader2 className="h-5 w-5 animate-spin text-primary shrink-0" />
-              )}
-              <p className="text-sm font-medium flex-1">{scanMessage}</p>
-              {!scanning && (
-                <button
-                  type="button"
-                  onClick={dismissScan}
-                  className="text-muted-foreground hover:text-foreground transition-colors"
-                  aria-label="Dismiss"
-                >
-                  <X className="h-4 w-4" />
-                </button>
-              )}
-            </div>
-            {foundDevices.length > 0 && (
-              <div className="space-y-1.5 pt-1">
-                <p className="text-xs text-muted-foreground font-medium">
-                  Discovered lights
-                </p>
-                {foundDevices.map((d) => {
-                  const info = getBrandInfo(d.brand);
-                  return (
-                    <div
-                      key={d.id}
-                      className="flex items-center gap-2 text-sm animate-in fade-in slide-in-from-left-2 duration-300"
-                    >
-                      <Lightbulb className={`h-3.5 w-3.5 shrink-0 ${info.color}`} />
-                      <span>{d.name}</span>
-                      <span className="text-xs text-muted-foreground">{info.label}</span>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
+          <div>
+            <p className="text-sm font-medium">Webcam Monitoring</p>
+            <p className="text-xs text-muted-foreground">
+              Monitor when your camera turns on or off to trigger scenes
+            </p>
           </div>
-        )}
+          <Toggle
+            checked={webcamMonitoring}
+            onChange={handleToggleWebcamMonitoring}
+          />
+        </div>
+
+        <div>
+          <label className="text-sm font-medium mb-1 block">
+            Webcam Poll Interval: {settings.pollIntervalMs}ms
+          </label>
+          <p className="text-xs text-muted-foreground mb-3">
+            How often LightSync checks if your camera is active. Lower values
+            are more responsive but use slightly more CPU.
+          </p>
+          <Slider
+            value={settings.pollIntervalMs}
+            min={250}
+            max={5000}
+            step={250}
+            onChange={(v) =>
+              setSettings((s) => ({ ...s, pollIntervalMs: v }))
+            }
+          />
+          <div className="flex justify-between text-xs text-muted-foreground mt-1">
+            <span>250ms (fast)</span>
+            <span>5000ms (slow)</span>
+          </div>
+        </div>
+
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-sm font-medium">Start Minimized</p>
+            <p className="text-xs text-muted-foreground">
+              Start LightSync minimized to system tray
+            </p>
+          </div>
+          <Toggle
+            checked={settings.startMinimized}
+            onChange={(v) =>
+              setSettings((s) => ({ ...s, startMinimized: v }))
+            }
+          />
+        </div>
+
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-sm font-medium">Launch at Login</p>
+            <p className="text-xs text-muted-foreground">
+              Automatically start LightSync when you log in
+            </p>
+          </div>
+          <Toggle
+            checked={settings.launchAtLogin}
+            onChange={(v) =>
+              setSettings((s) => ({ ...s, launchAtLogin: v }))
+            }
+          />
+        </div>
+
       </Card>
 
       <Card>
@@ -528,6 +552,15 @@ export function Settings() {
             Built with Wails, Go, React, and TypeScript.
           </p>
         </div>
+        <Button
+          variant="outline"
+          size="sm"
+          className="mt-4"
+          onClick={() => App.OpenConfigFile().catch((e: unknown) => console.error("Failed to open config:", e))}
+        >
+          <FileJson className="h-3.5 w-3.5" />
+          Open config.json
+        </Button>
       </Card>
     </div>
   );

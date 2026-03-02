@@ -1,7 +1,9 @@
 package lights
 
 import (
+	"bytes"
 	"context"
+	"encoding/binary"
 	"fmt"
 	"log"
 	"math"
@@ -17,6 +19,8 @@ type LIFXController struct {
 	mu      sync.RWMutex
 	devices map[string]lifxlan.Device
 	lights  map[string]light.Device
+
+	rediscoverMu sync.Mutex // serializes rediscoverDevice to avoid thundering herd
 }
 
 func NewLIFXController() *LIFXController {
@@ -30,26 +34,192 @@ func (c *LIFXController) Brand() Brand {
 	return BrandLIFX
 }
 
+// lifxBroadcastAddrs returns the subnet-directed broadcast address for every
+// active IPv4 interface (e.g. 192.168.4.255 for a /24) plus the global
+// 255.255.255.255 fallback. Subnet-directed broadcasts reach the correct
+// interface regardless of the OS routing table, which matters on multi-NIC
+// Windows machines (e.g. WSL virtual adapter present).
+func lifxBroadcastAddrs() []*net.UDPAddr {
+	global, _ := net.ResolveUDPAddr("udp4", net.JoinHostPort(lifxlan.DefaultBroadcastHost, lifxlan.DefaultBroadcastPort))
+	addrs := []*net.UDPAddr{global}
+
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return addrs
+	}
+	for _, iface := range ifaces {
+		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		ifAddrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, a := range ifAddrs {
+			ipNet, ok := a.(*net.IPNet)
+			if !ok {
+				continue
+			}
+			ip4 := ipNet.IP.To4()
+			if ip4 == nil {
+				continue
+			}
+			bcast := make(net.IP, 4)
+			for i := range 4 {
+				bcast[i] = ip4[i] | ^ipNet.Mask[i]
+			}
+			addr, err := net.ResolveUDPAddr("udp4", net.JoinHostPort(bcast.String(), lifxlan.DefaultBroadcastPort))
+			if err == nil {
+				addrs = append(addrs, addr)
+			}
+		}
+	}
+	return addrs
+}
+
+// discoverLIFX sends LIFX GetService broadcasts over an explicit IPv4 socket
+// and returns discovered devices on a channel that is closed when ctx expires.
+// This replaces lifxlan.Discover which uses a dual-stack "udp" socket that
+// fails to broadcast on Windows with newer Go versions (no SO_BROADCAST on
+// IPv6 sockets).
+func discoverLIFX(ctx context.Context) (<-chan lifxlan.Device, error) {
+	msg, err := lifxlan.GenerateMessage(
+		lifxlan.Tagged,
+		0, // source
+		lifxlan.AllDevices,
+		0, // flags
+		0, // sequence
+		lifxlan.GetService,
+		nil, // payload
+	)
+	if err != nil {
+		return nil, fmt.Errorf("generate GetService: %w", err)
+	}
+
+	conn, err := net.ListenPacket("udp4", ":0")
+	if err != nil {
+		return nil, fmt.Errorf("listen udp4: %w", err)
+	}
+
+	targets := lifxBroadcastAddrs()
+
+	ch := make(chan lifxlan.Device, 64)
+	go func() {
+		defer close(ch)
+		defer conn.Close()
+
+		// Send 3 rounds of broadcasts 500ms apart for reliability (UDP is lossy).
+		const broadcastRounds = 3
+		const broadcastInterval = 500 * time.Millisecond
+		go func() {
+			for i := range broadcastRounds {
+				if ctx.Err() != nil {
+					return
+				}
+				for _, target := range targets {
+					if _, err := conn.WriteTo(msg, target); err != nil {
+						log.Printf("[lifx] broadcast to %s failed: %v", target.IP, err)
+					}
+				}
+				if i < broadcastRounds-1 {
+					time.Sleep(broadcastInterval)
+				}
+			}
+		}()
+
+		buf := make([]byte, 4096)
+		for {
+			if ctx.Err() != nil {
+				return
+			}
+			if err := conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond)); err != nil {
+				return
+			}
+			n, addr, err := conn.ReadFrom(buf)
+			if err != nil {
+				if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+					continue
+				}
+				return
+			}
+
+			host, _, err := net.SplitHostPort(addr.String())
+			if err != nil {
+				continue
+			}
+			resp, err := lifxlan.ParseResponse(buf[:n])
+			if err != nil {
+				continue
+			}
+			if resp.Message != lifxlan.StateService {
+				continue
+			}
+
+			var payload lifxlan.RawStateServicePayload
+			if err := binary.Read(bytes.NewReader(resp.Payload), binary.LittleEndian, &payload); err != nil {
+				continue
+			}
+			if payload.Service != lifxlan.ServiceUDP {
+				continue
+			}
+
+			dev := lifxlan.NewDevice(
+				net.JoinHostPort(host, fmt.Sprintf("%d", payload.Port)),
+				payload.Service,
+				resp.Target,
+			)
+			select {
+			case ch <- dev:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	return ch, nil
+}
+
 func (c *LIFXController) Discover(ctx context.Context) ([]Device, error) {
-	log.Printf("[lifx] Discovering via UDP broadcast (port 56700)...")
+	log.Printf("[lifx] Discovering via UDP4 broadcast (port 56700)...")
 	discoverCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	ch := make(chan lifxlan.Device)
-	go func() {
-		_ = lifxlan.Discover(discoverCtx, ch, "")
-	}()
+	ch, err := discoverLIFX(discoverCtx)
+	if err != nil {
+		return nil, fmt.Errorf("lifx discovery: %w", err)
+	}
 
+	// Drain responses with a silence timeout: stop collecting once no new
+	// unique device has appeared for 1.5s. This avoids blocking for the full
+	// 5s discovery window when all devices respond within the first second.
 	seen := make(map[string]bool)
-	var result []Device
-
-	for raw := range ch {
-		target := raw.Target().String()
-		if seen[target] {
-			continue
+	var rawDevices []lifxlan.Device
+	silence := time.NewTimer(1500 * time.Millisecond)
+	defer silence.Stop()
+drain:
+	for {
+		select {
+		case raw, ok := <-ch:
+			if !ok {
+				break drain
+			}
+			target := raw.Target().String()
+			if seen[target] {
+				continue
+			}
+			seen[target] = true
+			rawDevices = append(rawDevices, raw)
+			log.Printf("[lifx] Got response from device %s", target)
+			silence.Reset(1500 * time.Millisecond)
+		case <-silence.C:
+			break drain
 		}
-		seen[target] = true
-		log.Printf("[lifx] Got response from device %s", target)
+	}
+	cancel() // stop the broadcast goroutine early
+
+	var result []Device
+	for _, raw := range rawDevices {
+		target := raw.Target().String()
 
 		labelCtx, labelCancel := context.WithTimeout(ctx, 2*time.Second)
 		ld, err := light.Wrap(labelCtx, raw, false)
@@ -221,13 +391,24 @@ func (c *LIFXController) getLight(ctx context.Context, deviceID string) (light.D
 }
 
 func (c *LIFXController) rediscoverDevice(ctx context.Context, deviceID string) (light.Device, error) {
+	c.rediscoverMu.Lock()
+	defer c.rediscoverMu.Unlock()
+
+	// Re-check: a concurrent caller may have populated the cache while we waited.
+	c.mu.RLock()
+	ld, ok := c.lights[deviceID]
+	c.mu.RUnlock()
+	if ok {
+		return ld, nil
+	}
+
 	discoverCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
 	_, _ = c.Discover(discoverCtx)
 
 	c.mu.RLock()
-	ld, ok := c.lights[deviceID]
+	ld, ok = c.lights[deviceID]
 	c.mu.RUnlock()
 	if !ok {
 		return nil, fmt.Errorf("device %s not found after re-discovery", deviceID)

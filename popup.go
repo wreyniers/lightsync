@@ -2,6 +2,7 @@ package main
 
 import (
 	"github.com/wailsapp/wails/v3/pkg/application"
+	"github.com/wailsapp/wails/v3/pkg/events"
 )
 
 var (
@@ -15,7 +16,8 @@ var (
 // when Wails tears them down on Windows.
 func (a *App) initPopupWindow() {}
 
-// OpenLightsPopup shows the lights popup window. Created on first call.
+// OpenLightsPopup shows the lights popup window. Created on first call;
+// recreated after being closed (Wails 3 destroys the window on close).
 func (a *App) OpenLightsPopup() {
 	if popupWindow == nil {
 		wailsApp := application.Get()
@@ -28,6 +30,9 @@ func (a *App) OpenLightsPopup() {
 			Windows: application.WindowsWindow{
 				Theme: application.Dark,
 			},
+		})
+		popupWindow.RegisterHook(events.Common.WindowClosing, func(e *application.WindowEvent) {
+			popupWindow = nil
 		})
 	}
 	popupWindow.Show()

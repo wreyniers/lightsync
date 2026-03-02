@@ -14,7 +14,6 @@ import {
 import { ScreenSyncSidebarWidget } from "@/components/screensync/ScreenSyncSidebarWidget";
 import { APP_VERSION } from "@/lib/types";
 import { useLightStore, lightActions } from "@/hooks/useLightStore";
-import { Toggle } from "@/components/ui/Toggle";
 import { App } from "@bindings";
 import { Events } from "@wailsio/runtime";
 
@@ -44,10 +43,7 @@ export function Layout({ children, currentPage, onNavigate }: LayoutProps) {
 
   const lightStore = useLightStore();
   const { lastScene } = lightStore;
-  const [monitoring, setMonitoring] = useState(true);
-
   useEffect(() => {
-    App.IsMonitoringEnabled().then(setMonitoring).catch(() => {});
     lightActions.hydrateActiveScene();
     lightActions.hydrateLastScene();
   }, []);
@@ -110,11 +106,6 @@ export function Layout({ children, currentPage, onNavigate }: LayoutProps) {
     : "No Scene";
   const sceneIsActive = !!activeScene;
 
-  const handleToggleMonitoring = (enabled: boolean) => {
-    App.SetMonitoringEnabled(enabled);
-    setMonitoring(enabled);
-  };
-
   const handlePlayScene = async () => {
     const scene = displayScene;
     if (!scene) return;
@@ -134,14 +125,16 @@ export function Layout({ children, currentPage, onNavigate }: LayoutProps) {
   return (
     <div className="flex h-screen">
       <aside className="w-64 bg-card flex flex-col">
-        <div className="p-6">
+        <div className="p-4">
           <div className="flex items-center gap-3">
-            <div className="h-9 w-9 rounded-lg bg-primary/20 flex items-center justify-center">
+            <div className="h-9 w-9 rounded-xl bg-primary/15 flex items-center justify-center shrink-0">
               <Lightbulb className="h-5 w-5 text-primary" />
             </div>
-            <div>
-              <h1 className="text-lg font-bold tracking-tight">LightSync</h1>
-              <p className="text-xs text-muted-foreground">Webcam to Lights</p>
+            <div className="min-w-0">
+              <h1 className="text-lg font-bold tracking-tight">
+                LightSync <span className="text-[10px] font-normal text-muted-foreground/70">v{APP_VERSION}</span>
+              </h1>
+              <p className="text-xs text-muted-foreground">Lights that follow your activity</p>
             </div>
           </div>
         </div>
@@ -150,12 +143,12 @@ export function Layout({ children, currentPage, onNavigate }: LayoutProps) {
           {/* Camera status card */}
           <div
             className={cn(
-              "flex items-center gap-3 rounded-xl px-4 py-3",
+              "flex items-center gap-3 rounded-xl px-4 py-3 transition-colors",
               cameraOn ? "bg-success/10" : "bg-muted"
             )}
           >
             <div className={cn(
-              "h-8 w-8 shrink-0 rounded-lg flex items-center justify-center",
+              "h-8 w-8 shrink-0 rounded-xl flex items-center justify-center",
               cameraOn ? "bg-success/20" : "bg-background/40"
             )}>
               {cameraOn ? (
@@ -177,8 +170,8 @@ export function Layout({ children, currentPage, onNavigate }: LayoutProps) {
           {/* Scene status card */}
           <div
             className={cn(
-              "group flex items-center gap-3 rounded-xl px-4 py-3",
-              sceneIsActive ? "bg-primary/10" : (lastScene ? "bg-muted/70" : "bg-muted")
+              "group flex items-center gap-3 rounded-xl px-4 py-3 transition-colors",
+              "bg-muted"
             )}
           >
             {/* Play / Stop button — replaces the Film icon */}
@@ -188,11 +181,11 @@ export function Layout({ children, currentPage, onNavigate }: LayoutProps) {
               disabled={!displayScene}
               title={sceneIsActive ? "Stop scene" : (displayScene ? "Play scene" : "No scene")}
               className={cn(
-                "h-8 w-8 shrink-0 rounded-lg flex items-center justify-center overflow-hidden transition-colors",
+                "h-8 w-8 shrink-0 rounded-xl flex items-center justify-center overflow-hidden transition-colors",
                 sceneIsActive
-                  ? "bg-primary/20 hover:bg-destructive/20 group/playbtn"
+                  ? "bg-background/40 hover:bg-destructive/20 group/playbtn"
                   : displayScene
-                  ? "bg-background/40 hover:bg-primary/20"
+                  ? "bg-background/40 hover:bg-background/60"
                   : "bg-background/40 cursor-default"
               )}
             >
@@ -205,7 +198,7 @@ export function Layout({ children, currentPage, onNavigate }: LayoutProps) {
                   <Square className="h-3 w-3 text-white drop-shadow fill-white" />
                 </div>
               ) : sceneIsActive ? (
-                <Square className="h-4 w-4 text-primary fill-primary" />
+                <Square className="h-4 w-4 text-foreground fill-foreground" />
               ) : displayScene ? (
                 <Play className={cn("h-4 w-4", "text-muted-foreground")} />
               ) : (
@@ -213,7 +206,7 @@ export function Layout({ children, currentPage, onNavigate }: LayoutProps) {
               )}
             </button>
             <div className="min-w-0 flex-1">
-              <p className={cn("text-sm font-semibold leading-tight truncate", sceneIsActive ? "text-primary" : (displayScene ? "text-foreground/70" : "text-muted-foreground"))}>
+              <p className={cn("text-sm font-semibold leading-tight truncate", sceneIsActive ? "text-foreground" : (displayScene ? "text-foreground/70" : "text-muted-foreground"))}>
                 {displayName}
               </p>
               <p className="text-xs text-muted-foreground mt-0.5">
@@ -239,11 +232,9 @@ export function Layout({ children, currentPage, onNavigate }: LayoutProps) {
             )}
           </div>
 
-          {/* Screen Sync live widget — appears automatically when the engine is running */}
-          <ScreenSyncSidebarWidget />
         </div>
 
-        <nav className="flex-1 px-3 space-y-1">
+        <nav className="flex-1 px-3 space-y-0.5">
           {navItems.map((item) => {
             const Icon = item.icon;
             const active = currentPage === item.id;
@@ -252,28 +243,21 @@ export function Layout({ children, currentPage, onNavigate }: LayoutProps) {
                 key={item.id}
                 onClick={() => onNavigate(item.id)}
                 className={cn(
-                  "flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors",
+                  "w-full flex items-center gap-2.5 rounded-xl px-3 py-2.5 text-sm transition-colors",
                   active
-                    ? "bg-primary/10 text-primary"
-                    : "text-muted-foreground hover:bg-secondary hover:text-foreground"
+                    ? "bg-muted text-foreground font-medium"
+                    : "text-foreground/45 hover:text-foreground/70 hover:bg-muted/30"
                 )}
               >
-                <Icon className="h-4 w-4" />
-                {item.label}
+                <Icon className="h-4 w-4 shrink-0" />
+                <span>{item.label}</span>
               </button>
             );
           })}
         </nav>
 
-        <div className="flex items-center justify-between px-6 py-3">
-          <span className="text-sm font-medium text-muted-foreground">Webcam Monitoring</span>
-          <Toggle checked={monitoring} onChange={handleToggleMonitoring} />
-        </div>
-
-        <div className="p-4">
-          <p className="text-xs text-muted-foreground text-center">
-            LightSync v{APP_VERSION}
-          </p>
+        <div className="px-3 pb-3">
+          <ScreenSyncSidebarWidget />
         </div>
       </aside>
 

@@ -30,6 +30,7 @@ declare module "@bindings" {
     GetWindowThumbnail(hwnd: number): Promise<string>;
     GetWindows(): Promise<any[]>;
     IsMonitoringEnabled(): Promise<boolean>;
+    OpenConfigFile(): Promise<void>;
     OpenLightsPopup(): Promise<void>;
     PairHueBridge(ip: string): Promise<{ success: boolean; username?: string; error?: string }>;
     QuitApp(): Promise<void>;

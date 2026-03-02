@@ -34,9 +34,10 @@ type Engine struct {
 	lightMgr *lights.Manager
 
 	// Event callbacks (set once before Start, not changed concurrently).
-	onColors func([]lights.Color)
-	onStats  func(Stats)
-	onState  func(running bool)
+	onColors    func([]lights.Color)
+	onZoneColors func([]lights.Color) // zone-ordered colors for spatial_grid preview only
+	onStats     func(Stats)
+	onState     func(running bool)
 
 	// Pipeline state (recreated on each Start).
 	sceneChange *process.SceneChangeDetector
@@ -95,8 +96,12 @@ func NewEngine(lm *lights.Manager) *Engine {
 	}
 }
 
-// OnColors registers a callback invoked on every extracted color set.
+// OnColors registers a callback invoked on every extracted color set (device-ordered).
 func (e *Engine) OnColors(fn func([]lights.Color)) { e.onColors = fn }
+
+// OnZoneColors registers a callback for zone-ordered colors (spatial_grid only).
+// Invoked with pre-assignment colors so the zone layout preview shows correct per-zone values.
+func (e *Engine) OnZoneColors(fn func([]lights.Color)) { e.onZoneColors = fn }
 
 // OnStats registers a callback invoked every second with performance metrics.
 func (e *Engine) OnStats(fn func(Stats)) { e.onStats = fn }
@@ -385,6 +390,11 @@ func (e *Engine) run(ctx context.Context) {
 
 		// ── 4. Temporal smoothing (adaptive EMA, resets on scene cut). ───────
 		colors = e.smoother.Smooth(colors, isCut, cfg.ColorSmoothing, cfg.BrightnessSmoothing, cfg.BrightnessMaxDeviation, cfg.BrightnessFloor, cfg.BrightnessCeiling)
+
+		// ── 4b. Emit zone-ordered colors for spatial_grid zone layout preview. ──
+		if e.onZoneColors != nil && cfg.MultiColorApproach == store.MultiColorSpatialGrid && len(colors) > 0 {
+			e.onZoneColors(colors)
+		}
 
 		// ── 5. Assign colors to devices. ────────────────────────────────────
 		currentOutput := prevOutput

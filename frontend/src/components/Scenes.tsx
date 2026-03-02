@@ -8,7 +8,6 @@ import {
   X,
   Check,
   Lightbulb,
-  Palette,
   MonitorPlay,
   Square,
 } from "lucide-react";
@@ -17,7 +16,6 @@ import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
 import { LightCard } from "@/components/ui/LightCard";
 import { ColorWheel, KelvinSlider } from "@/components/ui/ColorPanel";
-import { SegmentedControl } from "@/components/ui/SegmentedControl";
 import type { Device, DeviceState, Color, LightMode, ScreenSyncConfig, Scene as AppScene } from "@/lib/types";
 import { DEFAULT_KELVIN, DEFAULT_SCREEN_SYNC_CONFIG, SCREEN_SYNC_TRIGGER } from "@/lib/types";
 import { hueToKelvin, kelvinToHSB } from "@/lib/utils";
@@ -26,6 +24,7 @@ import { getRoomIcon, sortedRoomKeys } from "@/lib/rooms";
 import { sceneSwatchBackground } from "@/lib/sceneColors";
 import { SceneRow } from "@/components/SceneRow";
 import { ScreenSyncEditor } from "@/components/screensync/ScreenSyncEditor";
+import { OptionTile, SettingsLabel, SettingsSection } from "@/components/screensync/settings";
 import { SetupWizard } from "@/components/screensync/SetupWizard";
 import { useLightStore, lightActions } from "@/hooks/useLightStore";
 import { App } from "@bindings";
@@ -248,21 +247,25 @@ export function Scenes() {
     lightActions.previewSceneStates(devs);
   };
 
-  const exitEdit = useCallback(async (restoreLights: boolean) => {
-    if (restoreLights && Object.keys(preEditLightStates).length > 0) {
-      await lightActions.restoreLightStates(preEditLightStates, devices);
-    }
+  const exitEdit = useCallback((restoreLights: boolean) => {
+    const statesToRestore = restoreLights ? preEditLightStates : {};
+    const deviceList = devices;
+
+    // Close UI immediately so the user gets instant feedback
     setEditing(null);
     setCreating(false);
     setPreEditLightStates({});
+
+    // Restore lights in background (don't block UI)
+    if (Object.keys(statesToRestore).length > 0 && deviceList.length > 0) {
+      lightActions.restoreLightStates(statesToRestore, deviceList).catch((e) => {
+        console.error("Failed to restore light states on cancel:", e);
+      });
+    }
   }, [preEditLightStates, devices]);
 
-  const cancelEdit = async () => {
-    try {
-      await exitEdit(true);
-    } catch (e) {
-      console.error("Failed to restore light states on cancel:", e);
-    }
+  const cancelEdit = () => {
+    exitEdit(true);
   };
 
   const toggleDeviceInScene = (deviceId: string) => {
@@ -388,7 +391,7 @@ export function Scenes() {
           })
         );
       }
-      await exitEdit(false);
+      exitEdit(false);
       refresh();
     } catch (e) {
       console.error("Failed to save scene:", e);
@@ -523,10 +526,10 @@ export function Scenes() {
       )}
 
       {isEditing && (
-        <Card className="space-y-6 bg-secondary">
+        <Card className="space-y-6">
           {/* Header */}
-          <div className="flex items-center justify-between">
-            <div>
+          <div className="flex items-center justify-between gap-4">
+            <div className="min-w-0 flex-1">
               <p className="text-xs font-medium uppercase tracking-widest text-muted-foreground mb-0.5">
                 {creating ? "New Scene" : "Edit Scene"}
               </p>
@@ -535,7 +538,7 @@ export function Scenes() {
                 value={newName}
                 onChange={(e) => setNewName(e.target.value)}
                 placeholder="Scene name…"
-                className="text-xl font-bold bg-transparent focus:outline-none focus:ring-0 placeholder:text-muted-foreground/40 w-full"
+                className="text-xl font-bold bg-transparent focus:outline-none focus:ring-0 placeholder:text-muted-foreground/40 w-full min-w-0"
               />
             </div>
             <button
@@ -550,42 +553,33 @@ export function Scenes() {
           <div className="space-y-5">
             {/* Trigger */}
             <div>
-              <p className="text-xs font-medium uppercase tracking-widest text-muted-foreground mb-2.5">Trigger</p>
+              <SettingsLabel>Trigger</SettingsLabel>
               <div className="flex gap-2">
                 {([
                   { value: "", icon: Play, label: "Manual", taken: false },
                   { value: "camera_on", icon: Camera, label: "Camera On", taken: takenTriggers.has("camera_on") },
                   { value: "camera_off", icon: CameraOff, label: "Camera Off", taken: takenTriggers.has("camera_off") },
                   { value: SCREEN_SYNC_TRIGGER, icon: MonitorPlay, label: "Screen Sync", taken: false },
-                ] as const).map(({ value: t, icon: Icon, label, taken }) => {
-                  const active = newTrigger === t;
-                  return (
-                    <button
-                      key={t}
-                      type="button"
-                      onClick={() => {
-                        if (taken) return;
-                        setNewTrigger(t);
-                        if (t === SCREEN_SYNC_TRIGGER && creating && firstScreenSync.current) {
-                          firstScreenSync.current = false;
-                          setShowWizard(true);
-                        }
-                      }}
-                      disabled={taken}
-                      title={taken ? "Already used by another scene" : undefined}
-                      className={`flex-1 flex flex-col items-center gap-2 rounded-xl py-3.5 transition-all ${
-                        active
-                          ? "bg-primary/15 text-primary"
-                          : taken
-                          ? "opacity-30 cursor-not-allowed text-muted-foreground bg-background/20"
-                          : "bg-background/30 text-muted-foreground hover:bg-background/60 hover:text-foreground"
-                      }`}
-                    >
-                      <Icon className={`h-5 w-5 ${active ? "opacity-100" : "opacity-70"}`} />
-                      <span className="text-xs font-medium">{label}</span>
-                    </button>
-                  );
-                })}
+                ] as const).map(({ value: t, icon: Icon, label, taken }) => (
+                  <OptionTile
+                    key={t}
+                    selected={newTrigger === t}
+                    disabled={taken}
+                    onClick={() => {
+                      setNewTrigger(t);
+                      if (t === SCREEN_SYNC_TRIGGER && creating && firstScreenSync.current) {
+                        firstScreenSync.current = false;
+                        setShowWizard(true);
+                      }
+                    }}
+                    variant="grid"
+                    className="flex-1 items-center gap-2 py-3.5"
+                    title={taken ? "Already used by another scene" : undefined}
+                  >
+                    <Icon className="h-5 w-5" />
+                    <span className="text-xs font-medium">{label}</span>
+                  </OptionTile>
+                ))}
               </div>
             </div>
 
@@ -595,7 +589,22 @@ export function Scenes() {
                 config={screenSyncConfig}
                 devices={devices}
                 isRunning={syncRunning}
-                isLive={syncRunning && !creating && editing?.id === syncSceneId}
+                canPlay={!creating && editing != null}
+                onPlay={
+                  (editing != null && editing.id)
+                    ? (async () => {
+                        const id = editing.id as string;
+                        try {
+                          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                          await App.UpdateScreenSyncConfig(id, screenSyncConfig as any);
+                          await App.ActivateScene(id);
+                        } catch (e) {
+                          console.error("Failed to start Screen Sync:", e);
+                        }
+                      })
+                    : undefined
+                }
+                onStop={handleStopSync}
                 onChange={(patch) => {
                   const next = { ...screenSyncConfig, ...patch };
                   setScreenSyncConfig(next);
@@ -619,25 +628,30 @@ export function Scenes() {
 
             {/* Global Override — hidden for Screen Sync scenes */}
             {newTrigger !== SCREEN_SYNC_TRIGGER && (anyDeviceSupportsColor || anyDeviceSupportsKelvin) && (
-              <div className="space-y-3">
-                <div className="flex items-center gap-2">
-                  <Palette className="h-3.5 w-3.5 text-muted-foreground" />
-                  <p className="text-xs font-medium uppercase tracking-widest text-muted-foreground">Global Color</p>
+              <SettingsSection title="Global Color">
+                <div className="flex gap-2">
+                  {(
+                    [
+                      { value: "none" as const, label: "Off" },
+                      ...(anyDeviceSupportsColor ? [{ value: "color" as const, label: "Color" }] : []),
+                      ...(anyDeviceSupportsKelvin ? [{ value: "kelvin" as const, label: "Temperature" }] : []),
+                    ] as const
+                  ).map(({ value, label }) => (
+                    <OptionTile
+                      key={value}
+                      selected={globalMode === value}
+                      onClick={() => {
+                        setGlobalMode(value);
+                        if (value === "color") previewGlobalColor(globalColorValue);
+                        if (value === "kelvin") previewGlobalKelvin(globalKelvin);
+                      }}
+                      variant="list"
+                      className="flex-1 min-w-0 justify-center"
+                    >
+                      <span className="text-sm font-medium">{label}</span>
+                    </OptionTile>
+                  ))}
                 </div>
-
-                <SegmentedControl<GlobalMode>
-                  options={[
-                    { value: "none", label: "Off" },
-                    ...(anyDeviceSupportsColor ? [{ value: "color" as const, label: "Color" }] : []),
-                    ...(anyDeviceSupportsKelvin ? [{ value: "kelvin" as const, label: "Temperature" }] : []),
-                  ]}
-                  value={globalMode}
-                  onChange={(m) => {
-                    setGlobalMode(m);
-                    if (m === "color") previewGlobalColor(globalColorValue);
-                    if (m === "kelvin") previewGlobalKelvin(globalKelvin);
-                  }}
-                />
 
                 {globalMode === "color" && (
                   <div className="flex flex-col items-center gap-2 pt-1">
@@ -667,40 +681,40 @@ export function Scenes() {
                     <p className="text-center text-xs text-muted-foreground">{globalKelvin}K</p>
                   </div>
                 )}
-              </div>
+              </SettingsSection>
             )}
 
             {/* Per-device list — hidden for Screen Sync (handled in DevicesTab) */}
-            {newTrigger !== SCREEN_SYNC_TRIGGER && <div>
-              <p className="text-xs font-medium uppercase tracking-widest text-muted-foreground mb-2.5">Lights in Scene</p>
-              {devices.length === 0 ? (
-                <p className="text-sm text-muted-foreground">
-                  No lights discovered. Go to the Lights page to scan your network first.
-                </p>
-              ) : (
-                <div className="space-y-5">
-                  {roomKeys.map((roomKey) => {
-                    const roomDevices = grouped[roomKey];
-                    const RoomIcon = getRoomIcon(roomKey === UNASSIGNED_KEY ? undefined : roomKey);
-                    const roomLabel = roomKey === UNASSIGNED_KEY ? "Unassigned" : roomKey;
-                    return (
-                      <div key={roomKey}>
-                        <div className="flex items-center gap-2 mb-2">
-                          <RoomIcon className="h-4 w-4 text-muted-foreground" />
-                          <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                            {roomLabel}
-                          </span>
-                        </div>
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                          {roomDevices.map((device) => {
-                            const included = !!newDevices[device.id];
-                            const devState = newDevices[device.id];
-                            const devMode = getDeviceMode(device.id);
+            {newTrigger !== SCREEN_SYNC_TRIGGER && (
+              <SettingsSection title="Lights in Scene">
+                {devices.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">
+                    No lights discovered. Go to the Lights page to scan your network first.
+                  </p>
+                ) : (
+                  <div className="space-y-5">
+                    {roomKeys.map((roomKey) => {
+                      const roomDevices = grouped[roomKey];
+                      const RoomIcon = getRoomIcon(roomKey === UNASSIGNED_KEY ? undefined : roomKey);
+                      const roomLabel = roomKey === UNASSIGNED_KEY ? "Unassigned" : roomKey;
+                      return (
+                        <div key={roomKey}>
+                          <div className="flex items-center gap-2 mb-2">
+                            <RoomIcon className="h-4 w-4 text-muted-foreground" />
+                            <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                              {roomLabel}
+                            </span>
+                          </div>
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                            {roomDevices.map((device) => {
+                              const included = !!newDevices[device.id];
+                              const devState = newDevices[device.id];
+                              const devMode = getDeviceMode(device.id);
 
-                            // When a global override is active, pass the global values
-                            // to the card so it reflects the live preview color.
-                            // For kelvin-only devices under a global color override, derive
-                            // the equivalent Kelvin temperature from the hue instead.
+                              // When a global override is active, pass the global values
+                              // to the card so it reflects the live preview color.
+                              // For kelvin-only devices under a global color override, derive
+                              // the equivalent Kelvin temperature from the hue instead.
                             const isKelvinOnly = device.supportsKelvin && !device.supportsColor;
                             const derivedKelvin = isKelvinOnly && globalMode === "color"
                               ? Math.min(
@@ -791,14 +805,15 @@ export function Scenes() {
                                 </button>
                               </div>
                             );
-                          })}
+                            })}
+                          </div>
                         </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>}
+                      );
+                    })}
+                  </div>
+                )}
+            </SettingsSection>
+            )}
           </div>
 
           <div className="flex justify-end gap-2 pt-1">

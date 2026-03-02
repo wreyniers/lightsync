@@ -131,6 +131,11 @@ func (s *Store) GetLastSceneID() string {
 	return s.config.LastSceneID
 }
 
+// ConfigPath returns the path to the config file.
+func (s *Store) ConfigPath() string {
+	return s.filePath
+}
+
 func (s *Store) SetLastSceneID(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

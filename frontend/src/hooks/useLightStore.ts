@@ -6,6 +6,7 @@ import type { Device, DeviceState, Color, Scene } from "@/lib/types";
 import { DEFAULT_KELVIN, SCREEN_SYNC_TRIGGER } from "@/lib/types";
 
 interface LightStoreState {
+  loading: boolean;
   devices: Device[];
   deviceOn: Record<string, boolean>;
   brightness: Record<string, number>;
@@ -19,6 +20,7 @@ interface LightStoreState {
 }
 
 let state: LightStoreState = {
+  loading: true,
   devices: [],
   deviceOn: {},
   brightness: {},
@@ -148,13 +150,16 @@ async function refreshDevices() {
       .filter((r): r is PromiseFulfilledResult<FetchedPair> => r.status === "fulfilled")
       .map((r) => r.value);
     mergeFetchedLightStates(pairs);
-    state = { ...state, devices: devs };
-    emit(); // notify after devices update
+    state = { ...state, devices: devs, loading: false };
+    emit();
 
     if (devs.length > 0 && Object.keys(state.deviceOn).length < devs.length) {
       setTimeout(() => fetchLightStates(state.devices), 2000);
     }
-  } catch { /* swallow – caller can retry */ }
+  } catch {
+    state = { ...state, loading: false };
+    emit();
+  }
 }
 
 async function discoverLights(): Promise<Device[]> {

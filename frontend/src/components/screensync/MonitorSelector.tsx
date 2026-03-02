@@ -36,9 +36,9 @@ export function MonitorSelector({ selected, onChange }: MonitorSelectorProps) {
   const maxY = Math.max(...monitors.map((m) => m.y + m.height));
   const totalW = maxX - minX || 1;
   const totalH = maxY - minY || 1;
-  const containerW = 280;
-  const containerH = 90;
-  const scale = Math.min(containerW / totalW, containerH / totalH) * 0.85;
+  const containerW = 340;
+  const containerH = 120;
+  const scale = Math.min(containerW / totalW, containerH / totalH) * 0.9;
 
   return (
     <div className="space-y-2">
@@ -47,20 +47,21 @@ export function MonitorSelector({ selected, onChange }: MonitorSelectorProps) {
         style={{ width: containerW, height: containerH }}
       >
         {monitors.map((m) => {
-          const left = (m.x - minX) * scale + (containerW - totalW * scale) / 2;
-          const top = (m.y - minY) * scale + (containerH - totalH * scale) / 2;
-          const w = m.width * scale;
-          const h = m.height * scale;
+          const gap = 3;
+          const left = (m.x - minX) * scale + (containerW - totalW * scale) / 2 + gap;
+          const top = (m.y - minY) * scale + (containerH - totalH * scale) / 2 + gap;
+          const w = m.width * scale - gap * 2;
+          const h = m.height * scale - gap * 2;
           const isSelected = m.index === selected;
           return (
             <button
               key={m.index}
               type="button"
               onClick={() => onChange(m.index)}
-              className={`absolute rounded transition-all border text-xs font-semibold flex flex-col items-center justify-center gap-0.5 ${
+              className={`absolute rounded-lg transition-all flex flex-col items-center justify-center gap-0.5 ${
                 isSelected
-                  ? "bg-primary/20 border-primary text-primary"
-                  : "bg-background/40 border-border text-muted-foreground hover:bg-background/70 hover:border-primary/50"
+                  ? "bg-primary/15 text-sm font-medium"
+                  : "bg-background/30 text-muted-foreground hover:bg-background/60 hover:text-foreground text-sm font-medium"
               }`}
               style={{ left, top, width: w, height: h }}
             >
