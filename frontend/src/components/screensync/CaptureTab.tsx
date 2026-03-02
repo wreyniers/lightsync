@@ -4,8 +4,8 @@ import { Button } from "@/components/ui/Button";
 import { MonitorSelector } from "./MonitorSelector";
 import { WindowPicker } from "./WindowPicker";
 import { ColorPreview } from "./ColorPreview";
-import { StartRegionSelect } from "../../../wailsjs/go/main/App";
-import { EventsOn, EventsOff } from "../../../wailsjs/runtime/runtime";
+import { App } from "@bindings";
+import { Events } from "@wailsio/runtime";
 import type { ScreenSyncConfig } from "@/lib/types";
 
 interface CaptureTabProps {
@@ -38,8 +38,8 @@ export function CaptureTab({ config, onChange, isRunning }: CaptureTabProps) {
         });
       }
     };
-    EventsOn("screensync:region-selected", handler);
-    return () => { EventsOff("screensync:region-selected"); };
+    const off = Events.On("screensync:region-selected", (e) => handler(e.data));
+    return () => off();
   }, [onChange]);
 
   return (
@@ -94,7 +94,7 @@ export function CaptureTab({ config, onChange, isRunning }: CaptureTabProps) {
             <Button
               variant="secondary"
               size="sm"
-              onClick={() => StartRegionSelect()}
+              onClick={() => App.StartRegionSelect()}
             >
               <Crosshair className="h-3.5 w-3.5 mr-1" />
               Draw Region

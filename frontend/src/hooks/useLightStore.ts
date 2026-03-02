@@ -1,22 +1,9 @@
 import { useSyncExternalStore } from "react";
-import { EventsOn } from "../../wailsjs/runtime/runtime";
+import { Events } from "@wailsio/runtime";
+import { App } from "@bindings";
+import * as lights from "@bindings/internal/lights/models.js";
 import type { Device, DeviceState, Color, Scene } from "@/lib/types";
-import { DEFAULT_KELVIN } from "@/lib/types";
-import {
-  GetDevices,
-  GetLightState,
-  GetScene,
-  GetActiveScene,
-  GetLastSceneID,
-  GetScreenSyncState,
-  DiscoverLights,
-  RemoveDevice,
-  SetDeviceRoom,
-  SetLightState,
-  TurnOffLight,
-  TurnOnLight,
-} from "../../wailsjs/go/main/App";
-import { lights } from "../../wailsjs/go/models";
+import { DEFAULT_KELVIN, SCREEN_SYNC_TRIGGER } from "@/lib/types";
 
 interface LightStoreState {
   devices: Device[];
@@ -107,28 +94,28 @@ function getSnapshot(): LightStoreState {
 
 // ── Actions ────────────────────────────────────────────────────────
 
-async function fetchLightStates(deviceList: Device[]) {
-  const results = await Promise.allSettled(
-    deviceList.map((d) =>
-      GetLightState(d.id).then((s) => ({ id: d.id, state: s }))
-    )
-  );
+type FetchedPair = { id: string; state: DeviceState };
+
+/**
+ * Merges fetched light states into the store. Skips brightness/kelvin/color for
+ * devices recently set by user, recently applied by scene, or in Screen Sync.
+ * Uses color/kelvin mutual exclusion (device is either in color or CT mode).
+ */
+function mergeFetchedLightStates(pairs: FetchedPair[]): void {
   const onOff = { ...state.deviceOn };
   const bright = { ...state.brightness };
   const temps = { ...state.kelvin };
   const colors = { ...state.color };
-  for (const r of results) {
-    if (r.status === "fulfilled") {
-      const { id, state: s } = r.value;
-      onOff[id] = s.on;
-      // Skip brightness/kelvin/color while a user action or scene apply is in flight.
-      // Slow devices (Elgato HTTP) can return stale state before the hardware
-      // applies the change, which would clobber the optimistic store update.
-      // Also skip Screen Sync devices — we push their state from screensync:colors.
-      if (!recentlySetByUser(id) && !recentlyAppliedByScene(id) && !screenSyncDeviceIds.has(id)) {
-        if (s.brightness != null) bright[id] = Math.round(s.brightness * 100);
-        if (s.kelvin != null) temps[id] = s.kelvin;
-        if (s.color != null) colors[id] = s.color;
+  for (const { id, state: s } of pairs) {
+    onOff[id] = s.on;
+    if (!recentlySetByUser(id) && !recentlyAppliedByScene(id) && !screenSyncDeviceIds.has(id)) {
+      if (s.brightness != null) bright[id] = Math.round(s.brightness * 100);
+      if (s.color != null) {
+        colors[id] = s.color;
+        delete temps[id];
+      } else if (s.kelvin != null) {
+        temps[id] = s.kelvin;
+        delete colors[id];
       }
     }
   }
@@ -136,48 +123,42 @@ async function fetchLightStates(deviceList: Device[]) {
   emit();
 }
 
+async function fetchLightStates(deviceList: Device[]) {
+  const results = await Promise.allSettled(
+    deviceList.map((d) =>
+      App.GetLightState(d.id).then((s) => ({ id: d.id, state: s } as FetchedPair))
+    )
+  );
+  const pairs = results
+    .filter((r): r is PromiseFulfilledResult<FetchedPair> => r.status === "fulfilled")
+    .map((r) => r.value);
+  mergeFetchedLightStates(pairs);
+}
+
 async function refreshDevices() {
   try {
-    const d = await GetDevices();
+    const d = await App.GetDevices();
     const devs = d || [];
-
     const results = await Promise.allSettled(
       devs.map((dev) =>
-        GetLightState(dev.id).then((s) => ({ id: dev.id, state: s }))
+        App.GetLightState(dev.id).then((s) => ({ id: dev.id, state: s } as FetchedPair))
       )
     );
-    const onOff = { ...state.deviceOn };
-    const bright = { ...state.brightness };
-    const temps = { ...state.kelvin };
-    const colors = { ...state.color };
-    for (const r of results) {
-      if (r.status === "fulfilled") {
-        const { id, state: s } = r.value;
-        onOff[id] = s.on;
-        if (!recentlySetByUser(id) && !recentlyAppliedByScene(id) && !screenSyncDeviceIds.has(id)) {
-          if (s.brightness != null) bright[id] = Math.round(s.brightness * 100);
-          if (s.color != null) {
-            colors[id] = s.color;
-            delete temps[id];
-          } else if (s.kelvin != null) {
-            temps[id] = s.kelvin;
-            delete colors[id];
-          }
-        }
-      }
-    }
+    const pairs = results
+      .filter((r): r is PromiseFulfilledResult<FetchedPair> => r.status === "fulfilled")
+      .map((r) => r.value);
+    mergeFetchedLightStates(pairs);
+    state = { ...state, devices: devs };
+    emit(); // notify after devices update
 
-    state = { ...state, devices: devs, deviceOn: onOff, brightness: bright, kelvin: temps, color: colors };
-    emit();
-
-    if (devs.length > 0 && Object.keys(onOff).length < devs.length) {
+    if (devs.length > 0 && Object.keys(state.deviceOn).length < devs.length) {
       setTimeout(() => fetchLightStates(state.devices), 2000);
     }
   } catch { /* swallow – caller can retry */ }
 }
 
 async function discoverLights(): Promise<Device[]> {
-  const result = await DiscoverLights();
+  const result = await App.DiscoverLights();
   const devs = result.devices || [];
   state = { ...state, devices: devs };
   emit();
@@ -189,8 +170,8 @@ async function toggleLight(deviceId: string, on: boolean) {
   state = { ...state, deviceOn: { ...state.deviceOn, [deviceId]: on } };
   emit();
   try {
-    if (on) await TurnOnLight(deviceId);
-    else await TurnOffLight(deviceId);
+    if (on) await App.TurnOnLight(deviceId);
+    else await App.TurnOffLight(deviceId);
   } catch {
     state = { ...state, deviceOn: { ...state.deviceOn, [deviceId]: !on } };
     emit();
@@ -208,7 +189,7 @@ async function setBrightness(deviceId: string, value: number) {
       kelvin: state.kelvin[deviceId] || DEFAULT_KELVIN,
     });
     try {
-      await SetLightState(deviceId, s);
+      await App.SetLightState(deviceId, s);
     } catch (e) {
       console.error("Failed to set brightness:", e);
     }
@@ -228,7 +209,7 @@ async function setKelvin(deviceId: string, value: number) {
       kelvin: value,
     });
     try {
-      await SetLightState(deviceId, s);
+      await App.SetLightState(deviceId, s);
     } catch (e) {
       console.error("Failed to set temperature:", e);
     }
@@ -250,7 +231,7 @@ async function setTemperature(deviceId: string, kelvin: number, brightness: numb
   scheduleSend(deviceId, async () => {
     const s = new lights.DeviceState({ on: true, brightness, kelvin });
     try {
-      await SetLightState(deviceId, s);
+      await App.SetLightState(deviceId, s);
     } catch (e) {
       console.error("Failed to set temperature:", e);
     }
@@ -273,7 +254,7 @@ async function setColor(deviceId: string, color: Color) {
       color: new lights.Color(color),
     });
     try {
-      await SetLightState(deviceId, s);
+      await App.SetLightState(deviceId, s);
     } catch (e) {
       console.error("Failed to set color:", e);
     }
@@ -351,7 +332,7 @@ function buildDeviceCommand(ds: DeviceState): InstanceType<typeof lights.DeviceS
 async function sendToDevices(deviceStates: Record<string, DeviceState>) {
   await Promise.allSettled(
     Object.entries(deviceStates).map(([id, ds]) =>
-      SetLightState(id, buildDeviceCommand(ds))
+      App.SetLightState(id, buildDeviceCommand(ds))
     )
   );
 }
@@ -375,9 +356,9 @@ async function restoreLightStates(
 
 async function hydrateActiveScene() {
   try {
-    const id = await GetActiveScene();
+    const id = await App.GetActiveScene();
     if (!id) return;
-    const scene = await GetScene(id);
+    const scene = await App.GetScene(id);
     if (scene?.devices && Object.keys(scene.devices).length > 0) {
       setActiveSceneWithStates(scene as Scene, scene.devices);
     } else if (scene) {
@@ -393,11 +374,11 @@ async function hydrateActiveScene() {
  *  Does NOT activate it — the user must click play in the sidebar. */
 async function hydrateLastScene() {
   try {
-    const id = await GetLastSceneID();
+    const id = await App.GetLastSceneID();
     if (!id) return;
     // Don't overwrite an already-active scene.
     if (state.activeScene) return;
-    const scene = await GetScene(id);
+    const scene = await App.GetScene(id);
     if (scene) setLastScene(scene as Scene);
   } catch {
     /* ignore */
@@ -422,7 +403,7 @@ async function setDeviceRoom(deviceId: string, room: string) {
   };
   emit();
   try {
-    await SetDeviceRoom(deviceId, room);
+    await App.SetDeviceRoom(deviceId, room);
   } catch (e) {
     console.error("Failed to set device room:", e);
     await refreshDevices();
@@ -448,7 +429,7 @@ async function removeDevice(deviceId: string) {
   };
   emit();
   try {
-    await RemoveDevice(deviceId);
+    await App.RemoveDevice(deviceId);
   } catch (e) {
     console.error("Failed to remove device:", e);
     await refreshDevices();
@@ -492,6 +473,23 @@ function clearScreenSyncDevices() {
   screenSyncDeviceIds.clear();
 }
 
+/**
+ * Stops the active scene: stops screen sync if applicable, deactivates the scene,
+ * and clears the local store. Use this instead of duplicating stop logic.
+ */
+async function stopActiveScene(activeScene: { trigger?: string } | null): Promise<void> {
+  try {
+    if (activeScene?.trigger === SCREEN_SYNC_TRIGGER) {
+      await App.StopScreenSync();
+    }
+    await App.DeactivateScene();
+  } catch (e) {
+    console.error("Failed to deactivate scene:", e);
+  } finally {
+    clearActiveScene();
+  }
+}
+
 export const lightActions = {
   refreshDevices,
   discoverLights,
@@ -509,6 +507,7 @@ export const lightActions = {
   applySceneStates,
   setActiveSceneOptimistic,
   clearActiveScene,
+  stopActiveScene,
   setLastScene,
   previewSceneStates,
   restoreLightStates,
@@ -523,7 +522,10 @@ export function useLightStore(): LightStoreState {
 
 // When scene:active fires, apply preset states AND active scene in one atomic update.
 // Also updates Screen Sync device tracking so we process scene:active once.
+let sceneActiveUnsubscribe: (() => void) | undefined;
 function setupSceneActiveListener() {
+  sceneActiveUnsubscribe?.();
+  sceneActiveUnsubscribe = undefined;
   try {
     const setDeviceIdsFromScene = (scene: { screenSync?: { deviceIds?: string[] } } | null) => {
       const ids = scene?.screenSync?.deviceIds;
@@ -534,12 +536,12 @@ function setupSceneActiveListener() {
       }
     };
 
-    EventsOn("scene:active", (payload: unknown) => {
+    const off = Events.On("scene:active", (e) => {
+      const payload = e.data;
       const scene =
         payload && typeof payload === "object" && "id" in payload
           ? (payload as Scene)
           : null;
-      // Screen Sync bridge: update or clear cached device IDs from the activated scene.
       setDeviceIdsFromScene(scene);
 
       if (!payload || !state.devices.length) return;
@@ -550,6 +552,7 @@ function setupSceneActiveListener() {
         emit();
       }
     });
+    sceneActiveUnsubscribe = off;
   } catch {
     setTimeout(setupSceneActiveListener, 500);
   }
@@ -558,7 +561,8 @@ function setupSceneActiveListener() {
 let screenSyncCachedDeviceIds: string[] = [];
 
 function setupAppLastSceneListener() {
-  EventsOn("app:last-scene", (payload: unknown) => {
+  Events.On("app:last-scene", (e) => {
+    const payload = e.data;
     if (state.activeScene) return;
     const scene = typeof payload === "object" && payload !== null && "id" in payload
       ? (payload as Scene)
@@ -569,14 +573,14 @@ function setupAppLastSceneListener() {
 
 function setupScreenSyncToStoreBridge() {
   const hydrate = (sceneId: string) => {
-    GetScene(sceneId)
-      .then((scene) => {
-        const ids = (scene?.screenSync as { deviceIds?: string[] })?.deviceIds ?? [];
+    App.GetScene(sceneId)
+      .then((scene: { screenSync?: { deviceIds?: string[] } }) => {
+        const ids = scene?.screenSync?.deviceIds ?? [];
         screenSyncCachedDeviceIds = ids;
       })
       .catch(() => {});
   };
-  GetScreenSyncState().then((s) => {
+  App.GetScreenSyncState().then((s) => {
     if (s?.running && s?.sceneId) {
       if (state.activeScene?.id === s.sceneId) {
         const ids = state.activeScene?.screenSync?.deviceIds;
@@ -587,7 +591,8 @@ function setupScreenSyncToStoreBridge() {
       hydrate(s.sceneId);
     }
   });
-  EventsOn("screensync:state", (data: { running?: boolean; sceneId?: string }) => {
+  Events.On("screensync:state", (e) => {
+    const data = e.data as { running?: boolean; sceneId?: string };
     if (!data?.running || !data.sceneId) {
       screenSyncCachedDeviceIds = [];
       clearScreenSyncDevices();
@@ -598,7 +603,8 @@ function setupScreenSyncToStoreBridge() {
     }
     hydrate(data.sceneId);
   });
-  EventsOn("screensync:colors", (colors: Color[]) => {
+  Events.On("screensync:colors", (e) => {
+    const colors = e.data as Color[];
     if (screenSyncCachedDeviceIds.length > 0 && Array.isArray(colors) && colors.length > 0) {
       applyScreenSyncColors(screenSyncCachedDeviceIds, colors);
     }

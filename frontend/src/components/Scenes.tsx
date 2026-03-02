@@ -19,7 +19,7 @@ import { LightCard } from "@/components/ui/LightCard";
 import { ColorWheel, KelvinSlider } from "@/components/ui/ColorPanel";
 import { SegmentedControl } from "@/components/ui/SegmentedControl";
 import type { Device, DeviceState, Color, LightMode, ScreenSyncConfig, Scene as AppScene } from "@/lib/types";
-import { DEFAULT_KELVIN, DEFAULT_SCREEN_SYNC_CONFIG } from "@/lib/types";
+import { DEFAULT_KELVIN, DEFAULT_SCREEN_SYNC_CONFIG, SCREEN_SYNC_TRIGGER } from "@/lib/types";
 import { hueToKelvin, kelvinToHSB } from "@/lib/utils";
 import { groupByRoom, UNASSIGNED_KEY } from "@/lib/brands";
 import { getRoomIcon, sortedRoomKeys } from "@/lib/rooms";
@@ -28,27 +28,16 @@ import { SceneRow } from "@/components/SceneRow";
 import { ScreenSyncEditor } from "@/components/screensync/ScreenSyncEditor";
 import { SetupWizard } from "@/components/screensync/SetupWizard";
 import { useLightStore, lightActions } from "@/hooks/useLightStore";
-import { lights, main, store } from "../../wailsjs/go/models";
-import { EventsOn } from "../../wailsjs/runtime/runtime";
-import {
-  GetScenes,
-  CreateScene,
-  UpdateScene,
-  DeleteScene,
-  ActivateScene,
-  CloneScene,
-  StopScreenSync,
-  DeactivateScene,
-  GetScreenSyncState,
-  UpdateScreenSyncConfig,
-} from "../../wailsjs/go/main/App";
+import { App } from "@bindings";
+import { CreateSceneRequest } from "@bindings";
+import * as lights from "@bindings/internal/lights/models.js";
+import * as store from "@bindings/internal/store/models.js";
+import { Events } from "@wailsio/runtime";
 
 type Scene = store.Scene;
 
 const DEFAULT_COLOR: Color = { h: 30, s: 1, b: 1 };
 type GlobalMode = "none" | "color" | "kelvin";
-
-const SCREEN_SYNC_TRIGGER = "screen_sync";
 
 // Keys that affect extraction/assignment and should apply immediately (no debounce).
 const DISCRETE_SCREEN_SYNC_KEYS = new Set([
@@ -139,13 +128,13 @@ export function Scenes() {
   }, [creating, editing, newName, newTrigger, newDevices, globalMode, globalColorValue, globalKelvin, screenSyncConfig]);
 
   const refresh = useCallback(() => {
-    GetScenes()
+    App.GetScenes()
       .then((s) => setScenes(s || []))
       .catch(() => {});
     lightActions.refreshDevices();
     lightActions.hydrateActiveScene();
     // Sync engine running state.
-    GetScreenSyncState()
+    App.GetScreenSyncState()
       .then((state) => {
         setSyncRunning(state.running);
         setSyncSceneId(state.sceneId ?? "");
@@ -163,7 +152,7 @@ export function Scenes() {
       setSyncRunning(data?.running ?? false);
       setSyncSceneId(data?.sceneId ?? "");
     };
-    const off = EventsOn("screensync:state", handler);
+    const off = Events.On("screensync:state", (e) => handler(e.data));
     return () => { off?.(); };
   }, []);
 
@@ -192,7 +181,7 @@ export function Scenes() {
     if (liveUpdateTimer.current) clearTimeout(liveUpdateTimer.current);
     liveUpdateTimer.current = setTimeout(() => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      UpdateScreenSyncConfig(editing!.id, screenSyncConfig as any).catch(console.error);
+      editing?.id && App.UpdateScreenSyncConfig(editing.id, screenSyncConfig as any).catch(console.error);
     }, 300);
 
     return () => {
@@ -223,8 +212,8 @@ export function Scenes() {
 
   const startEdit = (scene: Scene) => {
     setEditing(scene);
-    setNewName(scene.name);
-    setNewTrigger(scene.trigger);
+    setNewName(scene.name ?? "");
+    setNewTrigger(scene.trigger ?? "");
     const devs = scene.devices || {};
     setNewDevices(devs);
     setDeviceModes({});
@@ -378,7 +367,7 @@ export function Scenes() {
 
     try {
       if (editing) {
-        await UpdateScene(
+        await App.UpdateScene(
           new store.Scene({
             ...editing,
             name: newName,
@@ -389,8 +378,8 @@ export function Scenes() {
           })
         );
       } else {
-        await CreateScene(
-          new main.CreateSceneRequest({
+        await App.CreateScene(
+          new CreateSceneRequest({
             name: newName,
             trigger: newTrigger,
             devices: isScreenSync ? {} : toModelDevices(finalDevices),
@@ -407,18 +396,18 @@ export function Scenes() {
   };
 
   const handleDelete = async (id: string) => {
-    try { await DeleteScene(id); refresh(); } catch (e) { console.error(e); }
+    try { await App.DeleteScene(id); refresh(); } catch (e) { console.error(e); }
   };
 
   const handleClone = async (id: string) => {
-    try { await CloneScene(id); refresh(); } catch (e) { console.error(e); }
+    try { await App.CloneScene(id); refresh(); } catch (e) { console.error(e); }
   };
 
   const handleActivate = async (id: string) => {
     const scene = scenes.find((s) => s.id === id);
     if (scene) lightActions.setActiveSceneOptimistic(scene as AppScene);
     try {
-      await ActivateScene(id);
+      await App.ActivateScene(id);
     } catch (e) {
       console.error("Failed to activate scene:", e);
       lightActions.refreshLightStates();
@@ -427,7 +416,7 @@ export function Scenes() {
 
   const handleStopSync = async () => {
     try {
-      await StopScreenSync();
+      await App.StopScreenSync();
       setSyncRunning(false);
     } catch (e) {
       console.error("Failed to stop screen sync:", e);
@@ -436,16 +425,9 @@ export function Scenes() {
 
   const handleStop = async (sceneId: string) => {
     const scene = scenes.find((s) => s.id === sceneId);
-    lightActions.clearActiveScene();
-    try {
-      if (scene?.trigger === "screen_sync") {
-        await StopScreenSync();
-        setSyncRunning(false);
-      } else {
-        await DeactivateScene();
-      }
-    } catch (e) {
-      console.error("Failed to stop scene:", e);
+    await lightActions.stopActiveScene(scene ?? null);
+    if (scene?.trigger === SCREEN_SYNC_TRIGGER) {
+      setSyncRunning(false);
     }
   };
 
@@ -627,9 +609,9 @@ export function Scenes() {
                   const isDiscreteOnly =
                     patchKeys.length > 0 &&
                     patchKeys.every((k) => DISCRETE_SCREEN_SYNC_KEYS.has(k));
-                  if (isLiveScene && isDiscreteOnly && editing) {
+                  if (isLiveScene && isDiscreteOnly && editing?.id) {
                     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                    UpdateScreenSyncConfig(editing.id, next as any).catch(console.error);
+                    App.UpdateScreenSyncConfig(editing.id, next as any).catch(console.error);
                   }
                 }}
               />
@@ -853,15 +835,15 @@ export function Scenes() {
         <div className="space-y-2">
           {scenes.map((scene) => (
             <SceneRow
-              key={scene.id}
+              key={scene.id ?? ""}
               scene={scene as AppScene}
               isActive={activeSceneId === scene.id}
               devices={devices}
-              onActivate={() => handleActivate(scene.id)}
-              onStop={() => handleStop(scene.id)}
+              onActivate={() => scene.id && handleActivate(scene.id)}
+              onStop={() => scene.id && handleStop(scene.id)}
               onEdit={() => startEdit(scene)}
-              onDelete={() => handleDelete(scene.id)}
-              onClone={() => handleClone(scene.id)}
+              onDelete={() => scene.id && handleDelete(scene.id)}
+              onClone={() => scene.id && handleClone(scene.id)}
             />
           ))}
         </div>

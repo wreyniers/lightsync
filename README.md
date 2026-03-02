@@ -78,14 +78,18 @@ Or build from source — see the [Development](#development) section.
 
 ### Discovering Lights
 
-1. Open LightSync and navigate to the **Lights** tab.
-2. Click **Scan for Lights**. The app runs a multi-phase scan:
+1. Open LightSync and navigate to the **Settings** tab.
+2. Click **Scan Network**. The app runs a multi-phase scan:
    - mDNS for Elgato devices
    - SSDP + N-UPnP cloud lookup for Hue bridges
    - UDP broadcast for LIFX and Govee
    - Subnet HTTP probe as a fallback for Elgato and Hue
 3. Discovered devices appear grouped by brand. Each card shows the device name, current power state, brightness, and color.
 4. You can control lights directly from the **Lights** tab — toggle power, adjust brightness, and change color or color temperature.
+
+**Discovery fails on Windows?** mDNS and UDP broadcast can be blocked by Windows Firewall. When you first run LightSync, allow it through the firewall if prompted. If discovery finds no devices:
+- **Elgato**: Use the "Add Elgato Key Light by IP" field in Settings (e.g. `192.168.4.73`) to add your device manually.
+- **LIFX / others**: Ensure the app is allowed for private networks in Windows Defender Firewall.
 
 > **Philips Hue** requires pairing a bridge first. See [Philips Hue Setup](#philips-hue-setup).
 
@@ -333,11 +337,14 @@ See [`docs/development.md`](docs/development.md) for a full local setup guide, i
 ## Building
 
 ```powershell
-# Production build (creates ./build/bin/lightsync.exe on Windows)
-wails build
+# Production build (Wails v3 — creates bin/lightsync.exe and copies to build/bin/)
+.\dev build
+```
 
-# Build with installer (Windows, requires NSIS)
-wails build -nsis
+Or manually:
+
+```powershell
+wails3 task build -p PRODUCTION=true
 ```
 
 The build embeds the compiled React frontend into the Go binary — no separate web server is needed at runtime.

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { GetMonitors } from "../../../wailsjs/go/main/App";
+import { App } from "@bindings";
 import type { MonitorInfo } from "@/lib/types";
 
 interface MonitorSelectorProps {
@@ -15,7 +15,7 @@ export function MonitorSelector({ selected, onChange }: MonitorSelectorProps) {
   const [monitors, setMonitors] = useState<MonitorInfo[]>([]);
 
   useEffect(() => {
-    GetMonitors()
+    App.GetMonitors()
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       .then((m: any) => setMonitors(m || []))
       .catch(() => {});

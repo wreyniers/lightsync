@@ -1,16 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { MonitorPlay, Lightbulb } from "lucide-react";
-import { EventsOn } from "../../../wailsjs/runtime/runtime";
-import { GetScreenSyncState } from "../../../wailsjs/go/main/App";
+import { App } from "@bindings";
+import { Events } from "@wailsio/runtime";
 import type { Color, ScreenSyncStats } from "@/lib/types";
 
 function openLightsPopup() {
-  const base = window.location.href.replace(/#.*$/, "");
-  window.open(
-    `${base}#lights-popup`,
-    "lightsync-lights",
-    "width=420,height=660,resizable=yes,menubar=no,toolbar=no,location=no,status=no"
-  );
+  App.OpenLightsPopup();
 }
 
 /**
@@ -33,7 +28,7 @@ export function ScreenSyncSidebarWidget() {
 
   // Hydrate on mount.
   useEffect(() => {
-    GetScreenSyncState()
+    App.GetScreenSyncState()
       .then((s) => setRunning(s.running))
       .catch(() => {});
   }, []);
@@ -75,9 +70,9 @@ export function ScreenSyncSidebarWidget() {
       if (Array.isArray(incoming)) setColors(incoming.slice(0, 8));
     };
 
-    const offState = EventsOn("screensync:state", stateHandler);
-    const offStats = EventsOn("screensync:stats", statsHandler);
-    const offColors = EventsOn("screensync:colors", colorsHandler);
+    const offState = Events.On("screensync:state", (e) => stateHandler(e.data));
+    const offStats = Events.On("screensync:stats", (e) => statsHandler(e.data));
+    const offColors = Events.On("screensync:colors", (e) => colorsHandler(e.data));
 
     return () => {
       offState?.();

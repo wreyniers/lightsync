@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
 import { sceneSwatchBackground } from "@/lib/sceneColors";
 import type { Device, Scene, DeviceState, ScreenSyncConfig } from "@/lib/types";
+import { SCREEN_SYNC_TRIGGER } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 interface SceneRowProps {
@@ -269,13 +270,13 @@ export function SceneRow({
   onClone,
 }: SceneRowProps) {
   const [expanded, setExpanded] = useState(false);
-  const isScreenSync = scene.trigger === "screen_sync";
+  const isScreenSync = scene.trigger === SCREEN_SYNC_TRIGGER;
   const swatchBg = isScreenSync ? undefined : sceneSwatchBackground(scene);
 
   const triggerLabel =
     scene.trigger === "camera_on" ? "Camera On"
     : scene.trigger === "camera_off" ? "Camera Off"
-    : scene.trigger === "screen_sync" ? "Screen Sync"
+    : scene.trigger === SCREEN_SYNC_TRIGGER ? "Screen Sync"
     : "Manual";
 
   const deviceCount = isScreenSync

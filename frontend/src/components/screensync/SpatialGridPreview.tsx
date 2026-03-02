@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { EventsOn } from "../../../wailsjs/runtime/runtime";
+import { Events } from "@wailsio/runtime";
 import type { Color } from "@/lib/types";
 
 interface SpatialGridPreviewProps {
@@ -29,7 +29,8 @@ export function SpatialGridPreview({ deviceCount }: SpatialGridPreviewProps) {
   const [colors, setColors] = useState<Color[]>([]);
 
   useEffect(() => {
-    const off = EventsOn("screensync:colors", (incoming: Color[]) => {
+    const off = Events.On("screensync:colors", (e) => {
+      const incoming = e.data as Color[];
       if (Array.isArray(incoming)) setColors(incoming.slice(0, n));
     });
     return () => { off?.(); };

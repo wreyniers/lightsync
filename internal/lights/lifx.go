@@ -31,6 +31,7 @@ func (c *LIFXController) Brand() Brand {
 }
 
 func (c *LIFXController) Discover(ctx context.Context) ([]Device, error) {
+	log.Printf("[lifx] Discovering via UDP broadcast (port 56700)...")
 	discoverCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
@@ -117,6 +118,7 @@ func (c *LIFXController) Discover(ctx context.Context) ([]Device, error) {
 		})
 	}
 
+	log.Printf("[lifx] Found %d device(s)", len(result))
 	return result, nil
 }
 

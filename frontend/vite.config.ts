@@ -10,6 +10,8 @@ export default defineConfig({
   },
   resolve: {
     alias: {
+      "@bindings/internal": path.resolve(__dirname, "./bindings/lightsync/internal"),
+      "@bindings": path.resolve(__dirname, "./bindings/lightsync/index.js"),
       "@": path.resolve(__dirname, "./src"),
     },
   },

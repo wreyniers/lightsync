@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { EventsOn } from "../../../wailsjs/runtime/runtime";
+import { Events } from "@wailsio/runtime";
 import type { Color } from "@/lib/types";
 
 interface ColorPreviewProps {
@@ -21,7 +21,7 @@ export function ColorPreview({ count = 1, className }: ColorPreviewProps) {
         setColors(incoming.slice(0, Math.min(count, incoming.length)));
       }
     };
-    const off = EventsOn("screensync:colors", handler);
+    const off = Events.On("screensync:colors", (e) => handler(e.data));
     return () => { off?.(); };
   }, [count]);
 

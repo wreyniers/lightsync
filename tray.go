@@ -5,10 +5,10 @@ import (
 	_ "embed"
 	"image"
 	"image/png"
-	goruntime "runtime"
+	"runtime"
 
-	"github.com/getlantern/systray"
-	"github.com/wailsapp/wails/v2/pkg/runtime"
+	"github.com/wailsapp/wails/v3/pkg/application"
+	"github.com/wailsapp/wails/v3/pkg/icons"
 	xdraw "golang.org/x/image/draw"
 )
 
@@ -16,51 +16,54 @@ import (
 var appIconPNG []byte
 
 func (a *App) setupTray() {
-	go func() {
-		goruntime.LockOSThread()
-		systray.Run(a.onTrayReady, a.onTrayExit)
-	}()
-}
+	wailsApp := application.Get()
+	systray := wailsApp.SystemTray.New()
 
-func (a *App) onTrayReady() {
-	systray.SetIcon(trayIcon())
-	systray.SetTitle("LightSync")
+	if runtime.GOOS == "darwin" {
+		systray.SetTemplateIcon(icons.SystrayMacTemplate)
+	} else {
+		systray.SetIcon(trayIcon())
+	}
 	systray.SetTooltip("LightSync - Webcam Light Sync")
 
-	mShow := systray.AddMenuItem("Show Window", "Show LightSync window")
-	systray.AddSeparator()
-	mToggle := systray.AddMenuItem("Pause Monitoring", "Pause webcam monitoring")
-	systray.AddSeparator()
-	mQuit := systray.AddMenuItem("Quit", "Quit LightSync")
+	menu := wailsApp.NewMenu()
+	mShow := menu.Add("Show Window")
+	menu.AddSeparator()
+	mToggle := menu.Add("Pause Monitoring")
+	menu.AddSeparator()
+	mQuit := menu.Add("Quit")
 
-	go func() {
-		for {
-			select {
-			case <-a.ctx.Done():
-				return
-			case <-mShow.ClickedCh:
-				runtime.WindowShow(a.ctx)
-				runtime.WindowSetAlwaysOnTop(a.ctx, true)
-				runtime.WindowSetAlwaysOnTop(a.ctx, false)
-			case <-mToggle.ClickedCh:
-				if a.webcamMon.IsEnabled() {
-					a.webcamMon.SetEnabled(false)
-					mToggle.SetTitle("Resume Monitoring")
-					runtime.EventsEmit(a.ctx, "monitoring:state", false)
-				} else {
-					a.webcamMon.SetEnabled(true)
-					mToggle.SetTitle("Pause Monitoring")
-					runtime.EventsEmit(a.ctx, "monitoring:state", true)
-				}
-			case <-mQuit.ClickedCh:
-				systray.Quit()
-				runtime.Quit(a.ctx)
-			}
+	mShow.OnClick(func(*application.Context) {
+		if a.mainWindow != nil {
+			a.mainWindow.Show()
+			a.mainWindow.SetAlwaysOnTop(true)
+			a.mainWindow.SetAlwaysOnTop(false)
+			a.mainWindow.Focus()
 		}
-	}()
-}
+	})
 
-func (a *App) onTrayExit() {}
+	mToggle.OnClick(func(*application.Context) {
+		if a.webcamMon.IsEnabled() {
+			a.webcamMon.SetEnabled(false)
+			mToggle.SetLabel("Resume Monitoring")
+			wailsApp.Event.Emit("monitoring:state", false)
+		} else {
+			a.webcamMon.SetEnabled(true)
+			mToggle.SetLabel("Pause Monitoring")
+			wailsApp.Event.Emit("monitoring:state", true)
+		}
+	})
+
+	mQuit.OnClick(func(*application.Context) {
+		wailsApp.Event.Emit("window:close-requested", nil)
+	})
+
+	if !a.webcamMon.IsEnabled() {
+		mToggle.SetLabel("Resume Monitoring")
+	}
+
+	systray.SetMenu(menu)
+}
 
 func trayIcon() []byte {
 	src, err := png.Decode(bytes.NewReader(appIconPNG))

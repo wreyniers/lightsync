@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from "react";
 import { Search, X, RefreshCw, Monitor } from "lucide-react";
-import { GetWindows, GetWindowThumbnail } from "../../../wailsjs/go/main/App";
+import { App } from "@bindings";
 import { Button } from "@/components/ui/Button";
 import type { WindowInfo } from "@/lib/types";
 
@@ -25,11 +25,11 @@ export function WindowPicker({ selectedHwnd, onSelect, onClose }: WindowPickerPr
     setLoading(true);
     try {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const wins: any[] = (await GetWindows()) || [];
+      const wins: any[] = (await App.GetWindows()) || [];
       setWindows(wins);
       // Load thumbnails lazily.
       for (const w of wins.slice(0, 20)) {
-        GetWindowThumbnail(w.hwnd)
+        App.GetWindowThumbnail(w.hwnd)
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           .then((b64: any) => {
             if (b64) {

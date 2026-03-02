@@ -171,6 +171,7 @@ func getLocalSubnets() []string {
 	var subnets []string
 	ifaces, err := net.Interfaces()
 	if err != nil {
+		log.Printf("[discovery] getLocalSubnets: net.Interfaces failed: %v", err)
 		return nil
 	}
 	for _, iface := range ifaces {
@@ -197,6 +198,9 @@ func getLocalSubnets() []string {
 			subnet := fmt.Sprintf("%d.%d.%d", ip[0], ip[1], ip[2])
 			subnets = append(subnets, subnet)
 		}
+	}
+	if len(subnets) == 0 {
+		log.Println("[discovery] getLocalSubnets: no valid IPv4 subnets found (check network adapters)")
 	}
 	return subnets
 }

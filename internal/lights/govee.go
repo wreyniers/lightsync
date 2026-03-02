@@ -3,6 +3,7 @@ package lights
 import (
 	"context"
 	"fmt"
+	"log"
 	"log/slog"
 	"os"
 	"sync"
@@ -45,6 +46,7 @@ func (c *GoveeController) ensureStarted() {
 }
 
 func (c *GoveeController) Discover(ctx context.Context) ([]Device, error) {
+	log.Printf("[govee] Discovering via LAN...")
 	c.ensureStarted()
 
 	time.Sleep(3 * time.Second)
@@ -71,6 +73,7 @@ func (c *GoveeController) Discover(ctx context.Context) ([]Device, error) {
 	}
 	c.mu.Unlock()
 
+	log.Printf("[govee] Found %d device(s)", len(result))
 	return result, nil
 }
 

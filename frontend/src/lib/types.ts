@@ -37,6 +37,9 @@ export type LightMode = "color" | "kelvin";
 export const DEFAULT_KELVIN = 4000;
 export const APP_VERSION = "1.0.0";
 
+/** Scene trigger value for Screen Sync (matches Go `internal/store/store.go`). */
+export const SCREEN_SYNC_TRIGGER = "screen_sync";
+
 export interface Scene {
   id: string;
   name: string;

@@ -6,18 +6,11 @@ import { Toggle } from "@/components/ui/Toggle";
 import { Slider } from "@/components/ui/Slider";
 import type { Settings as SettingsType, Device } from "@/lib/types";
 import { APP_VERSION } from "@/lib/types";
-import { store } from "../../wailsjs/go/models";
-import {
-  GetSettings,
-  UpdateSettings,
-  GetHueBridges,
-  DiscoverHueBridges,
-  PairHueBridge,
-  RemoveHueBridge,
-} from "../../wailsjs/go/main/App";
+import { App } from "@bindings";
+import { Settings as SettingsModel } from "@bindings/internal/store/models.js";
 import { lightActions } from "@/hooks/useLightStore";
 import { getBrandInfo } from "@/lib/brands";
-import { EventsOn } from "../../wailsjs/runtime/runtime";
+import { Events } from "@wailsio/runtime";
 
 interface ScanProgress {
   phase: string;
@@ -37,6 +30,53 @@ interface DiscoveredBridge {
 }
 
 type AddBridgeStep = "idle" | "scanning" | "results" | "pairing" | "paired";
+
+function AddElgatoByIPFallback({ onAdded }: { onAdded?: () => void }) {
+  const [ip, setIp] = useState("");
+  const [adding, setAdding] = useState(false);
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState(false);
+  const handleAdd = async () => {
+    const trimmed = ip.trim();
+    if (!trimmed) return;
+    setAdding(true);
+    setError("");
+    setSuccess(false);
+    try {
+      const device = await App.AddElgatoByIP(trimmed);
+      setSuccess(true);
+      setIp("");
+      lightActions.refreshDevices();
+      onAdded?.();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setAdding(false);
+    }
+  };
+  return (
+    <div className="rounded-lg border border-dashed border-border/60 p-3 space-y-2">
+      <p className="text-xs text-muted-foreground font-medium">
+        Discovery failed? Add Elgato Key Light by IP
+      </p>
+      <div className="flex gap-2">
+        <input
+          type="text"
+          placeholder="192.168.4.73"
+          value={ip}
+          onChange={(e) => setIp(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && handleAdd()}
+          className="flex-1 px-3 py-1.5 rounded-md bg-background border border-input text-sm font-mono"
+        />
+        <Button onClick={handleAdd} disabled={adding || !ip.trim()} size="sm">
+          {adding ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Add"}
+        </Button>
+      </div>
+      {error && <p className="text-xs text-destructive">{error}</p>}
+      {success && <p className="text-xs text-success">Added successfully. Check the Lights tab.</p>}
+    </div>
+  );
+}
 
 export function Settings() {
   const [settings, setSettings] = useState<SettingsType>({
@@ -70,7 +110,8 @@ export function Settings() {
     setScanPhase("");
     setFoundDevices([]);
 
-    scanCleanupRef.current = EventsOn("scan:progress", (progress: ScanProgress) => {
+    scanCleanupRef.current = Events.On("scan:progress", (e) => {
+      const progress = e.data as ScanProgress;
       setScanMessage(progress.message);
       setScanPhase(progress.phase);
       if (progress.devices && progress.devices.length > 0) {
@@ -104,8 +145,8 @@ export function Settings() {
   const pairIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
-    GetSettings().then(setSettings).catch(() => {});
-    GetHueBridges()
+    App.GetSettings().then(setSettings).catch(() => {});
+    App.GetHueBridges()
       .then((b) => setBridges(b || []))
       .catch(() => {});
   }, []);
@@ -123,7 +164,7 @@ export function Settings() {
     }
     if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
     saveTimeoutRef.current = setTimeout(() => {
-      UpdateSettings(new store.Settings(settings)).catch((e) =>
+      App.UpdateSettings(new SettingsModel(settings)).catch((e) =>
         console.error("Failed to save settings:", e),
       );
     }, 300);
@@ -137,7 +178,7 @@ export function Settings() {
     setDiscovered([]);
     setPairError("");
     try {
-      const found = await DiscoverHueBridges();
+      const found = await App.DiscoverHueBridges();
       setDiscovered(found || []);
       setStep("results");
     } catch (e) {
@@ -163,11 +204,11 @@ export function Settings() {
 
       pairIntervalRef.current = setInterval(async () => {
         try {
-          const result = await PairHueBridge(ip);
+          const result = await App.PairHueBridge(ip);
           if (result.success) {
             stopPairing();
             setStep("paired");
-            const updated = await GetHueBridges();
+            const updated = await App.GetHueBridges();
             setBridges(updated || []);
             setTimeout(() => setStep("idle"), 2000);
           } else if (
@@ -201,7 +242,7 @@ export function Settings() {
 
   const handleRemoveBridge = useCallback(async (id: string) => {
     try {
-      await RemoveHueBridge(id);
+      await App.RemoveHueBridge(id);
       setBridges((prev) => prev.filter((b) => b.id !== id));
     } catch (e) {
       console.error("Failed to remove bridge:", e);
@@ -422,6 +463,8 @@ export function Settings() {
         <p className="text-sm text-muted-foreground">
           Scan your local network to find LIFX, Hue, Elgato, and Govee lights.
         </p>
+
+        <AddElgatoByIPFallback />
 
         {showScanCard && (
           <div className="rounded-lg bg-background/50 border border-border p-4 space-y-3">

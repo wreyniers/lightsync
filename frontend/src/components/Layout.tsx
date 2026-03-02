@@ -15,15 +15,8 @@ import { ScreenSyncSidebarWidget } from "@/components/screensync/ScreenSyncSideb
 import { APP_VERSION } from "@/lib/types";
 import { useLightStore, lightActions } from "@/hooks/useLightStore";
 import { Toggle } from "@/components/ui/Toggle";
-import {
-  IsMonitoringEnabled,
-  SetMonitoringEnabled,
-  GetCameraState,
-  ActivateScene,
-  StopScreenSync,
-  DeactivateScene,
-} from "../../wailsjs/go/main/App";
-import { EventsOn } from "../../wailsjs/runtime/runtime";
+import { App } from "@bindings";
+import { Events } from "@wailsio/runtime";
 
 interface LayoutProps {
   children: ReactNode;
@@ -42,10 +35,10 @@ export function Layout({ children, currentPage, onNavigate }: LayoutProps) {
   // subscribe to camera:state for live updates. This avoids staged updates on load.
   const [cameraOn, setCameraOn] = useState(false);
   useEffect(() => {
-    GetCameraState().then(setCameraOn).catch(() => {});
+    App.GetCameraState().then(setCameraOn).catch(() => {});
   }, []);
   useEffect(() => {
-    const off = EventsOn("camera:state", (v: boolean) => setCameraOn(v));
+    const off = Events.On("camera:state", (e) => setCameraOn(e.data));
     return () => off?.();
   }, []);
 
@@ -54,7 +47,7 @@ export function Layout({ children, currentPage, onNavigate }: LayoutProps) {
   const [monitoring, setMonitoring] = useState(true);
 
   useEffect(() => {
-    IsMonitoringEnabled().then(setMonitoring).catch(() => {});
+    App.IsMonitoringEnabled().then(setMonitoring).catch(() => {});
     lightActions.hydrateActiveScene();
     lightActions.hydrateLastScene();
   }, []);
@@ -118,7 +111,7 @@ export function Layout({ children, currentPage, onNavigate }: LayoutProps) {
   const sceneIsActive = !!activeScene;
 
   const handleToggleMonitoring = (enabled: boolean) => {
-    SetMonitoringEnabled(enabled);
+    App.SetMonitoringEnabled(enabled);
     setMonitoring(enabled);
   };
 
@@ -127,7 +120,7 @@ export function Layout({ children, currentPage, onNavigate }: LayoutProps) {
     if (!scene) return;
     lightActions.setActiveSceneOptimistic(scene);
     try {
-      await ActivateScene(scene.id);
+      await App.ActivateScene(scene.id);
     } catch (e) {
       console.error("Failed to activate scene:", e);
       lightActions.clearActiveScene();
@@ -135,16 +128,7 @@ export function Layout({ children, currentPage, onNavigate }: LayoutProps) {
   };
 
   const handleStopScene = async () => {
-    try {
-      if (activeScene?.trigger === "screen_sync") {
-        await StopScreenSync();
-      }
-      await DeactivateScene();
-    } catch (e) {
-      console.error("Failed to deactivate scene:", e);
-    } finally {
-      lightActions.clearActiveScene();
-    }
+    await lightActions.stopActiveScene(activeScene ?? null);
   };
 
   return (

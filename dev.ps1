@@ -10,13 +10,13 @@ $env:Path = "C:\Program Files\Go\bin;$env:USERPROFILE\go\bin;" + $env:Path
 
 $PidFile = Join-Path $PSScriptRoot '.dev.pid'
 $LogFile = Join-Path $PSScriptRoot '.dev.log'
-$WailsExe = Join-Path "$env:USERPROFILE\go\bin" 'wails.exe'
+$Wails3Exe = Join-Path "$env:USERPROFILE\go\bin" 'wails3.exe'
 
 function Find-DevProcesses {
     $procs = @()
 
-    # The wails CLI process
-    $procs += Get-Process -Name 'wails' -ErrorAction SilentlyContinue
+    # The wails3 CLI process
+    $procs += Get-Process -Name 'wails3' -ErrorAction SilentlyContinue
 
     # The compiled Go app spawned by wails dev (lightsync-dev in dev mode)
     $procs += Get-Process -Name 'lightsync*' -ErrorAction SilentlyContinue
@@ -39,14 +39,19 @@ function Test-DevRunning {
 }
 
 function Start-Dev {
+    if (-not (Test-Path $Wails3Exe)) {
+        Write-Host "wails3 not found at $Wails3Exe" -ForegroundColor Red
+        Write-Host "Install with: go install github.com/wailsapp/wails/v3/cmd/wails3@latest" -ForegroundColor Yellow
+        return
+    }
     if (Test-DevRunning) {
         Write-Host 'Dev server is already running' -ForegroundColor Yellow
         return
     }
 
-    Write-Host 'Starting dev server...' -ForegroundColor Cyan
+    Write-Host 'Starting dev server (Wails v3)...' -ForegroundColor Cyan
 
-    $proc = Start-Process -FilePath $WailsExe -ArgumentList 'dev' `
+    $proc = Start-Process -FilePath $Wails3Exe -ArgumentList 'dev', '-config', './build/config.yml' `
         -WorkingDirectory $PSScriptRoot `
         -NoNewWindow `
         -RedirectStandardOutput $LogFile `
@@ -105,22 +110,39 @@ function Show-Log {
 }
 
 function Build-App {
-    Write-Host 'Building production executable...' -ForegroundColor Cyan
-
-    $iconIco = Join-Path $PSScriptRoot 'build\windows\icon.ico'
-    if (Test-Path $iconIco) {
-        Remove-Item $iconIco -Force
-        Write-Host '  Removed old icon.ico (will regenerate from appicon.png)' -ForegroundColor DarkGray
+    if (-not (Test-Path $Wails3Exe)) {
+        Write-Host "wails3 not found at $Wails3Exe" -ForegroundColor Red
+        Write-Host "Install with: go install github.com/wailsapp/wails/v3/cmd/wails3@latest" -ForegroundColor Yellow
+        return
     }
 
-    & $WailsExe build -clean
-    if ($LASTEXITCODE -eq 0) {
-        $exe = Join-Path $PSScriptRoot 'build\bin\lightsync.exe'
-        $size = [math]::Round((Get-Item $exe).Length / 1MB, 1)
-        Write-Host "Build complete: build\bin\lightsync.exe (${size} MB)" -ForegroundColor Green
+    Write-Host 'Building production executable (Wails v3)...' -ForegroundColor Cyan
+
+    Push-Location $PSScriptRoot
+    try {
+        & $Wails3Exe task build -p PRODUCTION=true
+        if ($LASTEXITCODE -eq 0) {
+            $exe = Join-Path $PSScriptRoot 'bin\lightsync.exe'
+            if (Test-Path $exe) {
+                $size = [math]::Round((Get-Item $exe).Length / 1MB, 1)
+                Write-Host "Build complete: bin\lightsync.exe (${size} MB)" -ForegroundColor Green
+
+                # Replace old v2 binary in build/bin so shortcuts/scripts use the new build
+                $buildBinExe = Join-Path $PSScriptRoot 'build\bin\lightsync.exe'
+                $buildBinDir = Split-Path $buildBinExe
+                if (-not (Test-Path $buildBinDir)) {
+                    New-Item -ItemType Directory -Path $buildBinDir -Force | Out-Null
+                }
+                Copy-Item $exe $buildBinExe -Force
+                Write-Host "Copied to build\bin\lightsync.exe" -ForegroundColor DarkGray
+            }
+        }
+        else {
+            Write-Host 'Build failed' -ForegroundColor Red
+        }
     }
-    else {
-        Write-Host 'Build failed' -ForegroundColor Red
+    finally {
+        Pop-Location
     }
 }
 

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { MinusCircle, LogOut, X } from "lucide-react";
-import { EventsOn, WindowHide } from "../../wailsjs/runtime/runtime";
-import { QuitApp } from "../../wailsjs/go/main/App";
+import { Events, Window } from "@wailsio/runtime";
+import { App } from "@bindings";
 
 /**
  * Listens for the `window:close-requested` event emitted by the Go backend
@@ -12,7 +12,7 @@ export function CloseConfirmDialog() {
   const [visible, setVisible] = useState(false);
 
   useEffect(() => {
-    const off = EventsOn("window:close-requested", () => setVisible(true));
+    const off = Events.On("window:close-requested", () => setVisible(true));
     return () => off?.();
   }, []);
 
@@ -20,12 +20,12 @@ export function CloseConfirmDialog() {
 
   const handleMinimize = () => {
     setVisible(false);
-    WindowHide();
+    Window.Hide();
   };
 
   const handleQuit = () => {
     setVisible(false);
-    QuitApp();
+    App.QuitApp();
   };
 
   return (

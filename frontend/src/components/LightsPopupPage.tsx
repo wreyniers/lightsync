@@ -9,12 +9,12 @@ import { sortedRoomKeys } from "@/lib/rooms";
 import type { LightMode } from "@/lib/types";
 import { DEFAULT_KELVIN } from "@/lib/types";
 import { resolveMode } from "@/lib/utils";
-import { GetCapturePreview, GetScreenSyncState } from "../../wailsjs/go/main/App";
+import { App } from "@bindings";
+import { Events } from "@wailsio/runtime";
 
 /**
  * Standalone lights panel rendered in a popup window.
- * Since the popup window is a separate WebView2 instance, Go-emitted events
- * don't reach it — we poll refreshDevices() every 3 s as a fallback.
+ * v3 events reach all windows, so we use Events.On instead of polling.
  */
 export function LightsPopupPage() {
   const { devices, deviceOn, brightness, kelvin, color } = useLightStore();
@@ -26,48 +26,43 @@ export function LightsPopupPage() {
   const [previewSrc, setPreviewSrc] = useState<string | null>(null);
   const [syncRunning, setSyncRunning] = useState(false);
 
-  // Initial load + periodic poll (events won't fire in this popup window).
+  // Initial load.
   useEffect(() => {
     lightActions.refreshDevices();
-    const interval = setInterval(() => lightActions.refreshDevices(), 3000);
-    return () => clearInterval(interval);
   }, []);
 
-  // Poll sync state every 2 s and preview frame every 1 s.
+  // Subscribe to screensync events (v3 events reach all windows).
   useEffect(() => {
-    let running = false;
-
-    const syncInterval = setInterval(async () => {
-      try {
-        const state = await GetScreenSyncState();
-        running = state.running;
-        setSyncRunning(state.running);
-        if (!state.running) setPreviewSrc(null);
-      } catch {
-        // ignore
-      }
-    }, 2000);
-
-    const previewInterval = setInterval(async () => {
-      if (!running) return;
-      try {
-        const b64 = await GetCapturePreview();
-        if (b64) setPreviewSrc(`data:image/jpeg;base64,${b64}`);
-      } catch {
-        // ignore
-      }
-    }, 1000);
-
-    // Kick off immediately.
-    GetScreenSyncState()
-      .then((s) => { running = s.running; setSyncRunning(s.running); })
-      .catch(() => {});
-
-    return () => {
-      clearInterval(syncInterval);
-      clearInterval(previewInterval);
-    };
+    const offState = Events.On("screensync:state", (e) => {
+      const s = e.data as { running?: boolean };
+      const running = s?.running ?? false;
+      setSyncRunning(running);
+      if (!running) setPreviewSrc(null);
+    });
+    const offColors = Events.On("screensync:colors", () => {
+      lightActions.refreshDevices();
+    });
+    return () => { offState(); offColors(); };
   }, []);
+
+  // Hydrate sync state on mount.
+  useEffect(() => {
+    App.GetScreenSyncState()
+      .then((s) => setSyncRunning(s.running))
+      .catch(() => {});
+  }, []);
+
+  // Poll preview frame every 1 s when sync is running (preview is a heavy operation).
+  useEffect(() => {
+    if (!syncRunning) return;
+    const interval = setInterval(async () => {
+      try {
+        const b64 = await App.GetCapturePreview();
+        if (b64) setPreviewSrc(`data:image/jpeg;base64,${b64}`);
+      } catch { /* ignore */ }
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [syncRunning]);
 
   function switchMode(deviceId: string, newMode: LightMode) {
     setModeOverrides((prev) => ({ ...prev, [deviceId]: newMode }));
