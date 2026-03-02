@@ -1,12 +1,14 @@
 package main
 
 import (
+	"context"
 	"embed"
 
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
 	"github.com/wailsapp/wails/v2/pkg/options/windows"
+	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 //go:embed all:frontend/dist
@@ -18,14 +20,23 @@ func main() {
 	app := NewApp()
 
 	err := wails.Run(&options.App{
-		Title:            "LightSync",
-		Width:            1100,
-		Height:           720,
-		DisableResize:    true,
-		MaxWidth:         1100,
-		MaxHeight:        720,
-		Frameless:        false,
-		HideWindowOnClose: true,
+		Title:         "LightSync",
+		Width:         2200,
+		Height:        1440,
+		DisableResize: false,
+		MaxWidth:      2200,
+		MaxHeight:     1440,
+		Frameless:     false,
+		// Intercept the close button so the frontend can ask the user
+		// whether to minimize to the system tray or quit entirely.
+		// When QuitApp() sets quitConfirmed the flag lets the quit through.
+		OnBeforeClose: func(ctx context.Context) (prevent bool) {
+			if app.quitConfirmed {
+				return false // allow the quit to proceed
+			}
+			runtime.EventsEmit(ctx, "window:close-requested")
+			return true // block; let the frontend dialog decide
+		},
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},

@@ -90,20 +90,29 @@ func (c *GoveeController) SetState(ctx context.Context, deviceID string, state D
 		return err
 	}
 
-	if err := dev.SetBrightness(govee.NewBrightness(uint(state.Brightness * 100))); err != nil {
-		return err
-	}
-
+	// For screen sync (and general color updates) we bake brightness directly
+	// into the RGB values so we need only one UDP command instead of three
+	// (TurnOn + SetBrightness + SetColor). Govee firmware rate-limits commands,
+	// so reducing to a single packet per frame is a meaningful throughput gain.
 	if state.Color != nil {
 		r, g, b := HSBToRGB(state.Color.H, state.Color.S, state.Color.B)
-		return dev.SetColor(govee.Color{R: uint(r), G: uint(g), B: uint(b)})
+		br := state.Brightness
+		if br <= 0 {
+			br = 1.0
+		}
+		return dev.SetColor(govee.Color{
+			R: uint(float64(r) * br),
+			G: uint(float64(g) * br),
+			B: uint(float64(b) * br),
+		})
 	}
 
 	if state.Kelvin != nil {
 		return dev.SetColorKelvin(govee.NewColorKelvin(uint(*state.Kelvin)))
 	}
 
-	return nil
+	// Brightness-only update (no color specified).
+	return dev.SetBrightness(govee.NewBrightness(uint(state.Brightness * 100)))
 }
 
 func (c *GoveeController) GetState(_ context.Context, deviceID string) (DeviceState, error) {

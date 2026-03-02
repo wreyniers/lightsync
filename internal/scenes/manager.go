@@ -49,6 +49,11 @@ func (m *Manager) triggerInUse(trigger, excludeID string) bool {
 	if trigger == "" {
 		return false
 	}
+	// Multiple screen_sync scenes are allowed; only one can be active at a time
+	// (enforced by the engine lifecycle in app.go, not by the trigger index).
+	if trigger == "screen_sync" {
+		return false
+	}
 	for _, s := range m.store.GetScenes() {
 		if s.ID != excludeID && s.Trigger == trigger {
 			return true
@@ -57,7 +62,7 @@ func (m *Manager) triggerInUse(trigger, excludeID string) bool {
 	return false
 }
 
-func (m *Manager) CreateScene(name, trigger string, devices map[string]lights.DeviceState, globalColor *lights.Color, globalKelvin *int) (store.Scene, error) {
+func (m *Manager) CreateScene(name, trigger string, devices map[string]lights.DeviceState, globalColor *lights.Color, globalKelvin *int, screenSync *store.ScreenSyncConfig) (store.Scene, error) {
 	if m.triggerInUse(trigger, "") {
 		return store.Scene{}, fmt.Errorf("trigger %q is already used by another scene", trigger)
 	}
@@ -69,6 +74,7 @@ func (m *Manager) CreateScene(name, trigger string, devices map[string]lights.De
 		Devices:      devices,
 		GlobalColor:  globalColor,
 		GlobalKelvin: globalKelvin,
+		ScreenSync:   screenSync,
 	}
 
 	if err := m.store.UpsertScene(scene); err != nil {
@@ -101,6 +107,9 @@ func (m *Manager) ActivateScene(ctx context.Context, id string) error {
 		return err
 	}
 
+	// Persist last activated scene so it can be restored on next app launch.
+	_ = m.store.SetLastSceneID(id)
+
 	// Emit scene:active immediately so the UI updates in one coherent step.
 	// Device state changes run afterward; the frontend applies preset states
 	// optimistically when it receives scene:active.
@@ -120,6 +129,36 @@ func (m *Manager) ActivateScene(ctx context.Context, id string) error {
 	}
 
 	return nil
+}
+
+// MarkActive sets the active scene ID and fires the onChange callback without
+// applying device states. Used by Screen Sync scenes where the engine controls
+// lights directly.
+func (m *Manager) MarkActive(id string) error {
+	scene, err := m.GetScene(id)
+	if err != nil {
+		return err
+	}
+
+	// Persist last activated scene so it can be restored on next app launch.
+	_ = m.store.SetLastSceneID(id)
+
+	m.mu.Lock()
+	m.activeScene = id
+	fn := m.onChange
+	m.mu.Unlock()
+
+	if fn != nil {
+		fn(scene)
+	}
+	return nil
+}
+
+// ClearActive clears the in-memory active scene without emitting any event.
+func (m *Manager) ClearActive() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.activeScene = ""
 }
 
 func (m *Manager) OnCameraStateChange(ctx context.Context, cameraOn bool) {

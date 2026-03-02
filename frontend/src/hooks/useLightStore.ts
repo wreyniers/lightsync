@@ -5,14 +5,16 @@ import { DEFAULT_KELVIN } from "@/lib/types";
 import {
   GetDevices,
   GetLightState,
-  TurnOnLight,
-  TurnOffLight,
-  SetLightState,
-  DiscoverLights,
-  GetActiveScene,
   GetScene,
+  GetActiveScene,
+  GetLastSceneID,
+  GetScreenSyncState,
+  DiscoverLights,
   RemoveDevice,
   SetDeviceRoom,
+  SetLightState,
+  TurnOffLight,
+  TurnOnLight,
 } from "../../wailsjs/go/main/App";
 import { lights } from "../../wailsjs/go/models";
 
@@ -23,6 +25,10 @@ interface LightStoreState {
   kelvin: Record<string, number>;
   color: Record<string, Color>;
   activeScene: Scene | null;
+  /** The last scene that was activated; shown in the sidebar when no scene is currently active. */
+  lastScene: Scene | null;
+  /** Set by the sidebar edit button; consumed (and cleared) by Scenes on mount. */
+  pendingEditSceneId: string | null;
 }
 
 let state: LightStoreState = {
@@ -32,6 +38,8 @@ let state: LightStoreState = {
   kelvin: {},
   color: {},
   activeScene: null,
+  lastScene: null,
+  pendingEditSceneId: null,
 };
 
 const listeners = new Set<() => void>();
@@ -59,6 +67,10 @@ const USER_SET_GRACE_MS = 2000;
 // were part of a recently applied scene — hardware may not have caught up yet.
 const sceneAppliedAt: Record<string, number> = {};
 const SCENE_APPLIED_GRACE_MS = 4000;
+
+// When Screen Sync is running, we push colors from screensync:colors into the store
+// so the Lights panel updates. Fetch must not overwrite these devices.
+const screenSyncDeviceIds = new Set<string>();
 
 function markUserSet(deviceId: string) {
   userSetAt[deviceId] = Date.now();
@@ -112,7 +124,8 @@ async function fetchLightStates(deviceList: Device[]) {
       // Skip brightness/kelvin/color while a user action or scene apply is in flight.
       // Slow devices (Elgato HTTP) can return stale state before the hardware
       // applies the change, which would clobber the optimistic store update.
-      if (!recentlySetByUser(id) && !recentlyAppliedByScene(id)) {
+      // Also skip Screen Sync devices — we push their state from screensync:colors.
+      if (!recentlySetByUser(id) && !recentlyAppliedByScene(id) && !screenSyncDeviceIds.has(id)) {
         if (s.brightness != null) bright[id] = Math.round(s.brightness * 100);
         if (s.kelvin != null) temps[id] = s.kelvin;
         if (s.color != null) colors[id] = s.color;
@@ -141,7 +154,7 @@ async function refreshDevices() {
       if (r.status === "fulfilled") {
         const { id, state: s } = r.value;
         onOff[id] = s.on;
-        if (!recentlySetByUser(id) && !recentlyAppliedByScene(id)) {
+        if (!recentlySetByUser(id) && !recentlyAppliedByScene(id) && !screenSyncDeviceIds.has(id)) {
           if (s.brightness != null) bright[id] = Math.round(s.brightness * 100);
           if (s.color != null) {
             colors[id] = s.color;
@@ -306,7 +319,19 @@ function setActiveSceneWithStates(scene: Scene, sceneDevices: Record<string, Dev
   const colors = { ...state.color };
   applyDeviceStateFromScene(onOff, bright, temps, colors, sceneDevices);
   markSceneApplied(Object.keys(sceneDevices));
-  state = { ...state, deviceOn: onOff, brightness: bright, kelvin: temps, color: colors, activeScene: scene };
+  state = { ...state, deviceOn: onOff, brightness: bright, kelvin: temps, color: colors, activeScene: scene, lastScene: scene };
+  emit();
+}
+
+/** Clear active scene from the store (does not modify lights). */
+function clearActiveScene() {
+  state = { ...state, activeScene: null };
+  emit();
+}
+
+/** Set the last-known scene without marking it as active (shown on startup before the user hits play). */
+function setLastScene(scene: Scene | null) {
+  state = { ...state, lastScene: scene };
   emit();
 }
 
@@ -356,9 +381,24 @@ async function hydrateActiveScene() {
     if (scene?.devices && Object.keys(scene.devices).length > 0) {
       setActiveSceneWithStates(scene as Scene, scene.devices);
     } else if (scene) {
-      state = { ...state, activeScene: scene as Scene };
+      state = { ...state, activeScene: scene as Scene, lastScene: scene as Scene };
       emit();
     }
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Load the last-activated scene (from persisted store) as a "ready to play" scene.
+ *  Does NOT activate it — the user must click play in the sidebar. */
+async function hydrateLastScene() {
+  try {
+    const id = await GetLastSceneID();
+    if (!id) return;
+    // Don't overwrite an already-active scene.
+    if (state.activeScene) return;
+    const scene = await GetScene(id);
+    if (scene) setLastScene(scene as Scene);
   } catch {
     /* ignore */
   }
@@ -368,7 +408,7 @@ function setActiveSceneOptimistic(scene: Scene) {
   if (scene?.devices && Object.keys(scene.devices).length > 0) {
     setActiveSceneWithStates(scene, scene.devices);
   } else if (scene) {
-    state = { ...state, activeScene: scene };
+    state = { ...state, activeScene: scene, lastScene: scene };
     emit();
   }
 }
@@ -415,9 +455,50 @@ async function removeDevice(deviceId: string) {
   }
 }
 
+function requestEditScene(sceneId: string) {
+  state = { ...state, pendingEditSceneId: sceneId };
+  emit();
+}
+
+function clearPendingEdit() {
+  state = { ...state, pendingEditSceneId: null };
+  emit();
+}
+
+/** Apply colors from Screen Sync engine to the store so the Lights panel updates live. */
+function applyScreenSyncColors(deviceIds: string[], colors: Color[]) {
+  if (deviceIds.length === 0 || colors.length === 0) return;
+  deviceIds.forEach((id) => screenSyncDeviceIds.add(id));
+  const bright = { ...state.brightness };
+  const temps = { ...state.kelvin };
+  const colorsMap = { ...state.color };
+  const onOff = { ...state.deviceOn };
+  // Single-color mode emits 1 color; multi-color emits N. Use colors[0] when only one.
+  const isSingle = colors.length === 1;
+  for (let i = 0; i < deviceIds.length; i++) {
+    const id = deviceIds[i];
+    const c = isSingle ? colors[0] : colors[i] ?? colors[0];
+    bright[id] = Math.round((c.b ?? 0.5) * 100);
+    colorsMap[id] = { h: c.h, s: c.s, b: c.b };
+    delete temps[id];
+    onOff[id] = true;
+  }
+  state = { ...state, deviceOn: onOff, brightness: bright, kelvin: temps, color: colorsMap };
+  emit();
+}
+
+/** Clear Screen Sync device tracking when sync stops. */
+function clearScreenSyncDevices() {
+  screenSyncDeviceIds.clear();
+}
+
 export const lightActions = {
   refreshDevices,
   discoverLights,
+  requestEditScene,
+  clearPendingEdit,
+  applyScreenSyncColors,
+  clearScreenSyncDevices,
   toggleLight,
   setBrightness,
   setKelvin,
@@ -427,10 +508,13 @@ export const lightActions = {
   removeDevice,
   applySceneStates,
   setActiveSceneOptimistic,
+  clearActiveScene,
+  setLastScene,
   previewSceneStates,
   restoreLightStates,
   refreshLightStates: () => fetchLightStates(state.devices),
   hydrateActiveScene,
+  hydrateLastScene,
 };
 
 export function useLightStore(): LightStoreState {
@@ -438,18 +522,31 @@ export function useLightStore(): LightStoreState {
 }
 
 // When scene:active fires, apply preset states AND active scene in one atomic update.
-// Layout reads both from the store, so no race and no second source.
+// Also updates Screen Sync device tracking so we process scene:active once.
 function setupSceneActiveListener() {
   try {
+    const setDeviceIdsFromScene = (scene: { screenSync?: { deviceIds?: string[] } } | null) => {
+      const ids = scene?.screenSync?.deviceIds;
+      if (Array.isArray(ids) && ids.length > 0) {
+        screenSyncCachedDeviceIds = ids;
+      } else {
+        screenSyncCachedDeviceIds = [];
+      }
+    };
+
     EventsOn("scene:active", (payload: unknown) => {
+      const scene =
+        payload && typeof payload === "object" && "id" in payload
+          ? (payload as Scene)
+          : null;
+      // Screen Sync bridge: update or clear cached device IDs from the activated scene.
+      setDeviceIdsFromScene(scene);
+
       if (!payload || !state.devices.length) return;
-      const scene = typeof payload === "object" && payload !== null && "devices" in payload && payload.devices
-        ? (payload as Scene)
-        : null;
       if (scene?.devices && Object.keys(scene.devices).length > 0) {
         setActiveSceneWithStates(scene, scene.devices);
       } else if (scene) {
-        state = { ...state, activeScene: scene };
+        state = { ...state, activeScene: scene, lastScene: scene };
         emit();
       }
     });
@@ -457,7 +554,61 @@ function setupSceneActiveListener() {
     setTimeout(setupSceneActiveListener, 500);
   }
 }
+
+let screenSyncCachedDeviceIds: string[] = [];
+
+function setupAppLastSceneListener() {
+  EventsOn("app:last-scene", (payload: unknown) => {
+    if (state.activeScene) return;
+    const scene = typeof payload === "object" && payload !== null && "id" in payload
+      ? (payload as Scene)
+      : null;
+    if (scene) setLastScene(scene);
+  });
+}
+
+function setupScreenSyncToStoreBridge() {
+  const hydrate = (sceneId: string) => {
+    GetScene(sceneId)
+      .then((scene) => {
+        const ids = (scene?.screenSync as { deviceIds?: string[] })?.deviceIds ?? [];
+        screenSyncCachedDeviceIds = ids;
+      })
+      .catch(() => {});
+  };
+  GetScreenSyncState().then((s) => {
+    if (s?.running && s?.sceneId) {
+      if (state.activeScene?.id === s.sceneId) {
+        const ids = state.activeScene?.screenSync?.deviceIds;
+        if (Array.isArray(ids) && ids.length > 0) {
+          screenSyncCachedDeviceIds = ids;
+        }
+      }
+      hydrate(s.sceneId);
+    }
+  });
+  EventsOn("screensync:state", (data: { running?: boolean; sceneId?: string }) => {
+    if (!data?.running || !data.sceneId) {
+      screenSyncCachedDeviceIds = [];
+      clearScreenSyncDevices();
+      return;
+    }
+    if (state.activeScene?.id === data.sceneId && Array.isArray(state.activeScene?.screenSync?.deviceIds)) {
+      screenSyncCachedDeviceIds = state.activeScene.screenSync.deviceIds;
+    }
+    hydrate(data.sceneId);
+  });
+  EventsOn("screensync:colors", (colors: Color[]) => {
+    if (screenSyncCachedDeviceIds.length > 0 && Array.isArray(colors) && colors.length > 0) {
+      applyScreenSyncColors(screenSyncCachedDeviceIds, colors);
+    }
+  });
+}
+
 setupSceneActiveListener();
+setupAppLastSceneListener();
+setupScreenSyncToStoreBridge();
+
 
 // camera:state fires when webcam turns on/off. The backend then emits scene:active
 // with the full scene — we apply that and do NOT refetch from hardware here.

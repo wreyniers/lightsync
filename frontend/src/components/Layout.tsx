@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { sceneSwatchBackground, liveSwatchBackground } from "@/lib/sceneColors";
 import {
@@ -7,7 +7,11 @@ import {
   Settings,
   Camera,
   CameraOff,
+  Pencil,
+  Play,
+  Square,
 } from "lucide-react";
+import { ScreenSyncSidebarWidget } from "@/components/screensync/ScreenSyncSidebarWidget";
 import { APP_VERSION } from "@/lib/types";
 import { useLightStore, lightActions } from "@/hooks/useLightStore";
 import { Toggle } from "@/components/ui/Toggle";
@@ -15,11 +19,14 @@ import {
   IsMonitoringEnabled,
   SetMonitoringEnabled,
   GetCameraState,
+  ActivateScene,
+  StopScreenSync,
+  DeactivateScene,
 } from "../../wailsjs/go/main/App";
 import { EventsOn } from "../../wailsjs/runtime/runtime";
 
 interface LayoutProps {
-  children: React.ReactNode;
+  children: ReactNode;
   currentPage: string;
   onNavigate: (page: string) => void;
 }
@@ -43,11 +50,13 @@ export function Layout({ children, currentPage, onNavigate }: LayoutProps) {
   }, []);
 
   const lightStore = useLightStore();
+  const { lastScene } = lightStore;
   const [monitoring, setMonitoring] = useState(true);
 
   useEffect(() => {
     IsMonitoringEnabled().then(setMonitoring).catch(() => {});
     lightActions.hydrateActiveScene();
+    lightActions.hydrateLastScene();
   }, []);
 
   // Single source of truth: store holds activeScene + device states atomically.
@@ -94,15 +103,48 @@ export function Layout({ children, currentPage, onNavigate }: LayoutProps) {
     [lightStore.devices, lightStore.deviceOn, lightStore.color, lightStore.kelvin]
   );
 
-  const displaySwatch = deviated ? liveSwatch : sceneSwatch;
+  // Show last scene in the sidebar when no scene is currently active.
+  const displayScene = activeScene ?? lastScene;
+  const lastSwatch = useMemo(
+    () => (lastScene && !activeScene ? sceneSwatchBackground(lastScene) : null),
+    [lastScene, activeScene]
+  );
+  const displaySwatch = activeScene ? (deviated ? liveSwatch : sceneSwatch) : lastSwatch;
   const displayName = activeScene
     ? deviated ? "Custom" : (activeScene.name ?? "")
+    : lastScene
+    ? lastScene.name
     : "No Scene";
   const sceneIsActive = !!activeScene;
 
   const handleToggleMonitoring = (enabled: boolean) => {
     SetMonitoringEnabled(enabled);
     setMonitoring(enabled);
+  };
+
+  const handlePlayScene = async () => {
+    const scene = displayScene;
+    if (!scene) return;
+    lightActions.setActiveSceneOptimistic(scene);
+    try {
+      await ActivateScene(scene.id);
+    } catch (e) {
+      console.error("Failed to activate scene:", e);
+      lightActions.clearActiveScene();
+    }
+  };
+
+  const handleStopScene = async () => {
+    try {
+      if (activeScene?.trigger === "screen_sync") {
+        await StopScreenSync();
+      }
+      await DeactivateScene();
+    } catch (e) {
+      console.error("Failed to deactivate scene:", e);
+    } finally {
+      lightActions.clearActiveScene();
+    }
   };
 
   return (
@@ -151,29 +193,70 @@ export function Layout({ children, currentPage, onNavigate }: LayoutProps) {
           {/* Scene status card */}
           <div
             className={cn(
-              "flex items-center gap-3 rounded-xl px-4 py-3",
-              sceneIsActive ? "bg-primary/10" : "bg-muted"
+              "group flex items-center gap-3 rounded-xl px-4 py-3",
+              sceneIsActive ? "bg-primary/10" : (lastScene ? "bg-muted/70" : "bg-muted")
             )}
           >
-            <div className={cn(
-              "h-8 w-8 shrink-0 rounded-lg flex items-center justify-center overflow-hidden",
-              !displaySwatch && (sceneIsActive ? "bg-primary/20" : "bg-background/40")
-            )}>
-              {displaySwatch ? (
-                <div className="h-8 w-8 rounded-lg" style={{ background: displaySwatch }} />
-              ) : (
-                <Film className={cn("h-4 w-4", sceneIsActive ? "text-primary" : "text-muted-foreground")} />
+            {/* Play / Stop button — replaces the Film icon */}
+            <button
+              type="button"
+              onClick={sceneIsActive ? handleStopScene : (displayScene ? handlePlayScene : undefined)}
+              disabled={!displayScene}
+              title={sceneIsActive ? "Stop scene" : (displayScene ? "Play scene" : "No scene")}
+              className={cn(
+                "h-8 w-8 shrink-0 rounded-lg flex items-center justify-center overflow-hidden transition-colors",
+                sceneIsActive
+                  ? "bg-primary/20 hover:bg-destructive/20 group/playbtn"
+                  : displayScene
+                  ? "bg-background/40 hover:bg-primary/20"
+                  : "bg-background/40 cursor-default"
               )}
-            </div>
-            <div className="min-w-0">
-              <p className={cn("text-sm font-semibold leading-tight truncate", sceneIsActive ? "text-primary" : "text-muted-foreground")}>
+            >
+              {displaySwatch && !sceneIsActive ? (
+                <div className="h-8 w-8 rounded-lg relative flex items-center justify-center" style={{ background: displaySwatch }}>
+                  <Play className="h-3 w-3 text-white drop-shadow" />
+                </div>
+              ) : displaySwatch && sceneIsActive ? (
+                <div className="h-8 w-8 rounded-lg relative flex items-center justify-center" style={{ background: displaySwatch }}>
+                  <Square className="h-3 w-3 text-white drop-shadow fill-white" />
+                </div>
+              ) : sceneIsActive ? (
+                <Square className="h-4 w-4 text-primary fill-primary" />
+              ) : displayScene ? (
+                <Play className={cn("h-4 w-4", "text-muted-foreground")} />
+              ) : (
+                <Film className="h-4 w-4 text-muted-foreground/40" />
+              )}
+            </button>
+            <div className="min-w-0 flex-1">
+              <p className={cn("text-sm font-semibold leading-tight truncate", sceneIsActive ? "text-primary" : (displayScene ? "text-foreground/70" : "text-muted-foreground"))}>
                 {displayName}
               </p>
               <p className="text-xs text-muted-foreground mt-0.5">
-                {sceneIsActive ? (deviated ? "Modified from preset" : "Scene active") : "No scene running"}
+                {sceneIsActive
+                  ? (deviated ? "Modified from preset" : "Scene active")
+                  : displayScene
+                  ? "Press play to start"
+                  : "No scene configured"}
               </p>
             </div>
+            {displayScene && (
+              <button
+                type="button"
+                onClick={() => {
+                  lightActions.requestEditScene((activeScene ?? lastScene)!.id);
+                  onNavigate("scenes");
+                }}
+                title="Edit scene"
+                className="shrink-0 opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-white/10"
+              >
+                <Pencil className="h-3.5 w-3.5" />
+              </button>
+            )}
           </div>
+
+          {/* Screen Sync live widget — appears automatically when the engine is running */}
+          <ScreenSyncSidebarWidget />
         </div>
 
         <nav className="flex-1 px-3 space-y-1">

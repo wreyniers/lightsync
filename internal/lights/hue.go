@@ -40,13 +40,19 @@ func NewHueController() *HueController {
 	}
 }
 
-// NewHueHTTPClient returns an HTTP client configured for Hue bridges
-// (self-signed TLS certificates, short timeout).
+// NewHueHTTPClient returns an HTTP client configured for Hue bridges.
+// ForceAttemptHTTP2 enables HTTP/2 multiplexing even with a custom TLS config,
+// allowing all concurrent per-light requests in the screen sync hot path to
+// share a single TCP connection instead of each paying a full TLS handshake.
 func NewHueHTTPClient(timeout time.Duration) *http.Client {
 	return &http.Client{
 		Timeout: timeout,
 		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+			TLSClientConfig:     &tls.Config{InsecureSkipVerify: true},
+			MaxIdleConns:        20,
+			MaxIdleConnsPerHost: 20,
+			IdleConnTimeout:     90 * time.Second,
+			ForceAttemptHTTP2:   true,
 		},
 	}
 }

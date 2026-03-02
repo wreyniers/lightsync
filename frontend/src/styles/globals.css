@@ -3,9 +3,9 @@
 @theme {
   --color-background: #0a0a0f;
   --color-foreground: #fafafa;
-  --color-card: rgba(255, 255, 255, 0.05);
+  --color-card: #14141e;
   --color-card-foreground: #fafafa;
-  --color-popover: rgba(255, 255, 255, 0.07);
+  --color-popover: #1e1e2c;
   --color-popover-foreground: #fafafa;
   --color-primary: #6366f1;
   --color-primary-foreground: #fafafa;

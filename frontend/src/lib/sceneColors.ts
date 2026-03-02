@@ -2,7 +2,7 @@ import { hsbToCSS, kelvinToCSS, swatchBackground } from "@/lib/utils";
 import type { Color, Device, Scene } from "@/lib/types";
 
 /** Extract unique CSS color strings from a scene (global or per-device). */
-export function sceneColors(scene: Scene): string[] {
+function sceneColors(scene: Scene): string[] {
   if (scene.globalColor) return [hsbToCSS(scene.globalColor.h, scene.globalColor.s, 1)];
   if (scene.globalKelvin != null) return [kelvinToCSS(scene.globalKelvin)];
 
@@ -28,7 +28,7 @@ export function sceneSwatchBackground(scene: Scene): string | null {
 }
 
 /** Extract unique CSS color strings from live device states (on devices only). */
-export function liveDeviceColors(
+function liveDeviceColors(
   devices: Device[],
   deviceOn: Record<string, boolean>,
   color: Record<string, Color>,

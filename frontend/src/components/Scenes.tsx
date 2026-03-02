@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import {
   Plus,
   Camera,
@@ -9,6 +9,8 @@ import {
   Check,
   Lightbulb,
   Palette,
+  MonitorPlay,
+  Square,
 } from "lucide-react";
 import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
@@ -16,27 +18,51 @@ import { Badge } from "@/components/ui/Badge";
 import { LightCard } from "@/components/ui/LightCard";
 import { ColorWheel, KelvinSlider } from "@/components/ui/ColorPanel";
 import { SegmentedControl } from "@/components/ui/SegmentedControl";
-import type { Device, DeviceState, Color, LightMode } from "@/lib/types";
-import { DEFAULT_KELVIN } from "@/lib/types";
+import type { Device, DeviceState, Color, LightMode, ScreenSyncConfig, Scene as AppScene } from "@/lib/types";
+import { DEFAULT_KELVIN, DEFAULT_SCREEN_SYNC_CONFIG } from "@/lib/types";
 import { hueToKelvin, kelvinToHSB } from "@/lib/utils";
 import { groupByRoom, UNASSIGNED_KEY } from "@/lib/brands";
 import { getRoomIcon, sortedRoomKeys } from "@/lib/rooms";
 import { sceneSwatchBackground } from "@/lib/sceneColors";
 import { SceneRow } from "@/components/SceneRow";
+import { ScreenSyncEditor } from "@/components/screensync/ScreenSyncEditor";
+import { SetupWizard } from "@/components/screensync/SetupWizard";
 import { useLightStore, lightActions } from "@/hooks/useLightStore";
 import { lights, main, store } from "../../wailsjs/go/models";
+import { EventsOn } from "../../wailsjs/runtime/runtime";
 import {
   GetScenes,
   CreateScene,
   UpdateScene,
   DeleteScene,
   ActivateScene,
+  CloneScene,
+  StopScreenSync,
+  DeactivateScene,
+  GetScreenSyncState,
+  UpdateScreenSyncConfig,
 } from "../../wailsjs/go/main/App";
 
 type Scene = store.Scene;
 
 const DEFAULT_COLOR: Color = { h: 30, s: 1, b: 1 };
 type GlobalMode = "none" | "color" | "kelvin";
+
+const SCREEN_SYNC_TRIGGER = "screen_sync";
+
+// Keys that affect extraction/assignment and should apply immediately (no debounce).
+const DISCRETE_SCREEN_SYNC_KEYS = new Set([
+  "subMethod",
+  "extractionMethod",
+  "colorMode",
+  "multiColorApproach",
+  "assignmentStrategy",
+  "captureMode",
+  "monitorIndex",
+  "speedPreset",
+  "brightnessMode",
+  "deviceIds",
+]);
 
 /** Build DeviceState from store values. Store uses brightness 0-100; DeviceState uses 0-1. */
 function captureDeviceState(
@@ -57,13 +83,19 @@ function captureDeviceState(
 }
 
 export function Scenes() {
-  const { devices, deviceOn, brightness, kelvin, color, activeScene: storeActiveScene } = useLightStore();
+  const { devices, deviceOn, brightness, kelvin, color, activeScene: storeActiveScene, pendingEditSceneId } = useLightStore();
   const [scenes, setScenes] = useState<Scene[]>([]);
   const [editing, setEditing] = useState<Scene | null>(null);
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
   const [newTrigger, setNewTrigger] = useState("");
   const [newDevices, setNewDevices] = useState<Record<string, DeviceState>>({});
+  const [screenSyncConfig, setScreenSyncConfig] = useState<ScreenSyncConfig>(DEFAULT_SCREEN_SYNC_CONFIG);
+  const [showWizard, setShowWizard] = useState(false);
+  const [syncRunning, setSyncRunning] = useState(false);
+  const [syncSceneId, setSyncSceneId] = useState("");
+  const firstScreenSync = useRef(true);
+  const liveUpdateTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Snapshot of light states before edit mode; restored when exiting.
   const [preEditLightStates, setPreEditLightStates] = useState<Record<string, DeviceState>>({});
@@ -85,6 +117,11 @@ export function Scenes() {
     if (newName.trim() !== editing.name) return true;
     if (newTrigger !== editing.trigger) return true;
 
+    if (newTrigger === SCREEN_SYNC_TRIGGER) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      return JSON.stringify(screenSyncConfig) !== JSON.stringify((editing.screenSync as any) || DEFAULT_SCREEN_SYNC_CONFIG);
+    }
+
     // Deep-compare device maps via JSON — both are plain serialisable objects.
     if (JSON.stringify(newDevices) !== JSON.stringify(editing.devices ?? {})) return true;
 
@@ -99,7 +136,7 @@ export function Scenes() {
     if (globalMode === "kelvin" && globalKelvin !== editing.globalKelvin) return true;
 
     return false;
-  }, [creating, editing, newName, newTrigger, newDevices, globalMode, globalColorValue, globalKelvin]);
+  }, [creating, editing, newName, newTrigger, newDevices, globalMode, globalColorValue, globalKelvin, screenSyncConfig]);
 
   const refresh = useCallback(() => {
     GetScenes()
@@ -107,16 +144,69 @@ export function Scenes() {
       .catch(() => {});
     lightActions.refreshDevices();
     lightActions.hydrateActiveScene();
+    // Sync engine running state.
+    GetScreenSyncState()
+      .then((state) => {
+        setSyncRunning(state.running);
+        setSyncSceneId(state.sceneId ?? "");
+      })
+      .catch(() => {});
   }, []);
 
   useEffect(() => { refresh(); }, [refresh]);
 
+  // Subscribe to screen sync engine state changes.
+  // Use returned unsubscribe so we don't remove the sidebar widget's listener.
+  useEffect(() => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const handler = (data: any) => {
+      setSyncRunning(data?.running ?? false);
+      setSyncSceneId(data?.sceneId ?? "");
+    };
+    const off = EventsOn("screensync:state", handler);
+    return () => { off?.(); };
+  }, []);
+
+  // Open the editor when the sidebar's edit button sets pendingEditSceneId.
+  // Wait until scenes have loaded (non-empty) before matching, so we don't
+  // clear the pending ID before the async GetScenes() fetch has resolved.
+  useEffect(() => {
+    if (!pendingEditSceneId || scenes.length === 0) return;
+    const scene = scenes.find((s) => s.id === pendingEditSceneId);
+    lightActions.clearPendingEdit();
+    if (scene) startEdit(scene as Scene);
+  }, [pendingEditSceneId, scenes]);
+
+  // Live-apply Screen Sync config changes while the engine is running for the scene being edited.
+  // Debounced at 300 ms so rapid slider moves don't flood the backend.
+  useEffect(() => {
+    const isLiveScene =
+      syncRunning &&
+      editing != null &&
+      !creating &&
+      editing.id === syncSceneId &&
+      newTrigger === SCREEN_SYNC_TRIGGER;
+
+    if (!isLiveScene) return;
+
+    if (liveUpdateTimer.current) clearTimeout(liveUpdateTimer.current);
+    liveUpdateTimer.current = setTimeout(() => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      UpdateScreenSyncConfig(editing!.id, screenSyncConfig as any).catch(console.error);
+    }, 300);
+
+    return () => {
+      if (liveUpdateTimer.current) clearTimeout(liveUpdateTimer.current);
+    };
+  }, [screenSyncConfig, syncRunning, syncSceneId, editing, creating, newTrigger]);
+
   const activeSceneId = storeActiveScene?.id ?? "";
 
-  const startCreate = () => {
+  const startCreate = (initialTrigger?: string) => {
+    const trigger = initialTrigger ?? "";
     setCreating(true);
     setNewName("");
-    setNewTrigger("");
+    setNewTrigger(trigger);
     setNewDevices({});
     setDeviceModes({});
     setGlobalMode("none");
@@ -124,6 +214,11 @@ export function Scenes() {
     setGlobalKelvin(DEFAULT_KELVIN);
     setEditing(null);
     setPreEditLightStates({});
+    setScreenSyncConfig(DEFAULT_SCREEN_SYNC_CONFIG);
+    if (trigger === SCREEN_SYNC_TRIGGER && firstScreenSync.current) {
+      firstScreenSync.current = false;
+      setShowWizard(true);
+    }
   };
 
   const startEdit = (scene: Scene) => {
@@ -134,6 +229,9 @@ export function Scenes() {
     setNewDevices(devs);
     setDeviceModes({});
     setCreating(false);
+    // Restore ScreenSync config.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    setScreenSyncConfig((scene.screenSync as any) || DEFAULT_SCREEN_SYNC_CONFIG);
 
     // Restore global override that was saved with the scene; fall back to none.
     if (scene.globalColor) {
@@ -276,6 +374,8 @@ export function Scenes() {
       ? { globalColor: undefined, globalKelvin: globalKelvin }
       : { globalColor: undefined, globalKelvin: undefined };
 
+    const isScreenSync = newTrigger === SCREEN_SYNC_TRIGGER;
+
     try {
       if (editing) {
         await UpdateScene(
@@ -283,8 +383,9 @@ export function Scenes() {
             ...editing,
             name: newName,
             trigger: newTrigger,
-            devices: toModelDevices(finalDevices),
-            ...globalOverride,
+            devices: isScreenSync ? {} : toModelDevices(finalDevices),
+            ...(isScreenSync ? {} : globalOverride),
+            screenSync: isScreenSync ? screenSyncConfig : undefined,
           })
         );
       } else {
@@ -292,8 +393,9 @@ export function Scenes() {
           new main.CreateSceneRequest({
             name: newName,
             trigger: newTrigger,
-            devices: toModelDevices(finalDevices),
-            ...globalOverride,
+            devices: isScreenSync ? {} : toModelDevices(finalDevices),
+            ...(isScreenSync ? {} : globalOverride),
+            screenSync: isScreenSync ? screenSyncConfig : undefined,
           })
         );
       }
@@ -308,14 +410,42 @@ export function Scenes() {
     try { await DeleteScene(id); refresh(); } catch (e) { console.error(e); }
   };
 
+  const handleClone = async (id: string) => {
+    try { await CloneScene(id); refresh(); } catch (e) { console.error(e); }
+  };
+
   const handleActivate = async (id: string) => {
     const scene = scenes.find((s) => s.id === id);
-    if (scene) lightActions.setActiveSceneOptimistic(scene);
+    if (scene) lightActions.setActiveSceneOptimistic(scene as AppScene);
     try {
       await ActivateScene(id);
     } catch (e) {
       console.error("Failed to activate scene:", e);
       lightActions.refreshLightStates();
+    }
+  };
+
+  const handleStopSync = async () => {
+    try {
+      await StopScreenSync();
+      setSyncRunning(false);
+    } catch (e) {
+      console.error("Failed to stop screen sync:", e);
+    }
+  };
+
+  const handleStop = async (sceneId: string) => {
+    const scene = scenes.find((s) => s.id === sceneId);
+    lightActions.clearActiveScene();
+    try {
+      if (scene?.trigger === "screen_sync") {
+        await StopScreenSync();
+        setSyncRunning(false);
+      } else {
+        await DeactivateScene();
+      }
+    } catch (e) {
+      console.error("Failed to stop scene:", e);
     }
   };
 
@@ -375,12 +505,38 @@ export function Scenes() {
 
   return (
     <div className="space-y-8">
+      {/* Setup wizard */}
+      {showWizard && (
+        <SetupWizard
+          config={screenSyncConfig}
+          onChange={(patch) => setScreenSyncConfig((prev) => ({ ...prev, ...patch }))}
+          onFinish={() => setShowWizard(false)}
+          onSkip={() => setShowWizard(false)}
+        />
+      )}
+
       {!isEditing && (
-        <div className="flex justify-end">
-          <Button onClick={startCreate}>
-            <Plus className="h-4 w-4" />
-            New Scene
-          </Button>
+        <div className="flex items-center justify-between">
+          {syncRunning && (
+            <div className="flex items-center gap-2">
+              <span className="h-2 w-2 rounded-full bg-success animate-pulse" />
+              <span className="text-xs text-muted-foreground">Screen Sync active</span>
+              <button
+                type="button"
+                onClick={handleStopSync}
+                className="text-xs text-destructive hover:underline flex items-center gap-1"
+              >
+                <Square className="h-3 w-3" />
+                Stop
+              </button>
+            </div>
+          )}
+          <div className="ml-auto">
+            <Button onClick={() => startCreate()}>
+              <Plus className="h-4 w-4" />
+              New Scene
+            </Button>
+          </div>
         </div>
       )}
 
@@ -415,16 +571,24 @@ export function Scenes() {
               <p className="text-xs font-medium uppercase tracking-widest text-muted-foreground mb-2.5">Trigger</p>
               <div className="flex gap-2">
                 {([
-                  { value: "", icon: Play, label: "Manual Only", taken: false },
+                  { value: "", icon: Play, label: "Manual", taken: false },
                   { value: "camera_on", icon: Camera, label: "Camera On", taken: takenTriggers.has("camera_on") },
                   { value: "camera_off", icon: CameraOff, label: "Camera Off", taken: takenTriggers.has("camera_off") },
+                  { value: SCREEN_SYNC_TRIGGER, icon: MonitorPlay, label: "Screen Sync", taken: false },
                 ] as const).map(({ value: t, icon: Icon, label, taken }) => {
                   const active = newTrigger === t;
                   return (
                     <button
                       key={t}
                       type="button"
-                      onClick={() => !taken && setNewTrigger(t)}
+                      onClick={() => {
+                        if (taken) return;
+                        setNewTrigger(t);
+                        if (t === SCREEN_SYNC_TRIGGER && creating && firstScreenSync.current) {
+                          firstScreenSync.current = false;
+                          setShowWizard(true);
+                        }
+                      }}
                       disabled={taken}
                       title={taken ? "Already used by another scene" : undefined}
                       className={`flex-1 flex flex-col items-center gap-2 rounded-xl py-3.5 transition-all ${
@@ -443,8 +607,36 @@ export function Scenes() {
               </div>
             </div>
 
-            {/* Global Override */}
-            {(anyDeviceSupportsColor || anyDeviceSupportsKelvin) && (
+            {/* Screen Sync config editor */}
+            {newTrigger === SCREEN_SYNC_TRIGGER && (
+              <ScreenSyncEditor
+                config={screenSyncConfig}
+                devices={devices}
+                isRunning={syncRunning}
+                isLive={syncRunning && !creating && editing?.id === syncSceneId}
+                onChange={(patch) => {
+                  const next = { ...screenSyncConfig, ...patch };
+                  setScreenSyncConfig(next);
+                  // Apply discrete changes immediately so they take effect without waiting for debounce
+                  const isLiveScene =
+                    syncRunning &&
+                    editing != null &&
+                    !creating &&
+                    editing.id === syncSceneId;
+                  const patchKeys = Object.keys(patch);
+                  const isDiscreteOnly =
+                    patchKeys.length > 0 &&
+                    patchKeys.every((k) => DISCRETE_SCREEN_SYNC_KEYS.has(k));
+                  if (isLiveScene && isDiscreteOnly && editing) {
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    UpdateScreenSyncConfig(editing.id, next as any).catch(console.error);
+                  }
+                }}
+              />
+            )}
+
+            {/* Global Override — hidden for Screen Sync scenes */}
+            {newTrigger !== SCREEN_SYNC_TRIGGER && (anyDeviceSupportsColor || anyDeviceSupportsKelvin) && (
               <div className="space-y-3">
                 <div className="flex items-center gap-2">
                   <Palette className="h-3.5 w-3.5 text-muted-foreground" />
@@ -496,8 +688,8 @@ export function Scenes() {
               </div>
             )}
 
-            {/* Per-device list */}
-            <div>
+            {/* Per-device list — hidden for Screen Sync (handled in DevicesTab) */}
+            {newTrigger !== SCREEN_SYNC_TRIGGER && <div>
               <p className="text-xs font-medium uppercase tracking-widest text-muted-foreground mb-2.5">Lights in Scene</p>
               {devices.length === 0 ? (
                 <p className="text-sm text-muted-foreground">
@@ -624,7 +816,7 @@ export function Scenes() {
                   })}
                 </div>
               )}
-            </div>
+            </div>}
           </div>
 
           <div className="flex justify-end gap-2 pt-1">
@@ -650,7 +842,7 @@ export function Scenes() {
           <p className="text-sm text-muted-foreground mt-2 max-w-md">
             Create a scene to define what your lights should do when your camera turns on or off.
           </p>
-          <Button onClick={startCreate} className="mt-6">
+          <Button onClick={() => startCreate()} className="mt-6">
             <Plus className="h-4 w-4" />
             Create Your First Scene
           </Button>
@@ -662,11 +854,14 @@ export function Scenes() {
           {scenes.map((scene) => (
             <SceneRow
               key={scene.id}
-              scene={scene}
+              scene={scene as AppScene}
               isActive={activeSceneId === scene.id}
+              devices={devices}
               onActivate={() => handleActivate(scene.id)}
+              onStop={() => handleStop(scene.id)}
               onEdit={() => startEdit(scene)}
               onDelete={() => handleDelete(scene.id)}
+              onClone={() => handleClone(scene.id)}
             />
           ))}
         </div>

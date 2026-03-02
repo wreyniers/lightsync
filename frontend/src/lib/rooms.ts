@@ -10,7 +10,7 @@ import {
 } from "lucide-react";
 import { UNASSIGNED_KEY } from "@/lib/brands";
 
-export interface RoomPreset {
+interface RoomPreset {
   name: string;
   icon: LucideIcon;
 }

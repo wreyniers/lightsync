@@ -29,11 +29,12 @@ A desktop application for automatically controlling smart lights based on webcam
 ## Features
 
 - **Webcam-triggered automation** — scenes activate automatically when your camera turns on or off
+- **Screen Sync** — continuously captures the screen, extracts colors, and drives your lights in real time; supports monitor, region, window, and active-window capture modes
 - **Multi-brand support** — control LIFX, Philips Hue, Elgato Key Light, and Govee devices from one interface
 - **Scene editor** — define per-device states (power, brightness, color, color temperature) and save them as named scenes
 - **Global color/temperature override** — apply a single color or Kelvin value to all devices in a scene at once
 - **Auto-discovery** — finds lights on your local network via mDNS, SSDP, and subnet probing; no manual IP entry required
-- **System tray** — runs minimized, accessible via tray icon with pause/resume control
+- **System tray** — runs minimized, accessible via tray icon with pause/resume control; close button minimizes to tray, "Exit" quits
 - **Single-instance enforcement** — prevents duplicate app instances from running simultaneously
 - **Persistent config** — device list, scenes, and settings survive restarts
 
@@ -100,15 +101,27 @@ You can also **activate a scene manually** by clicking the play button next to i
 
 ### Triggers
 
-Each scene can have one of three triggers:
+Each scene can have one of the following triggers:
 
 | Trigger | When it activates |
 |---------|------------------|
 | `camera_on` | Automatically when the webcam is detected as in use |
 | `camera_off` | Automatically when the webcam is no longer in use |
 | `manual` | Only when you click the activate button in the UI |
+| `screen_sync` | Continuous screen capture; the engine drives lights in real time |
 
-Only one scene per trigger type is active at a time. Saving a new `camera_on` scene replaces the previous one.
+Only one scene per trigger type is active at a time (except `screen_sync`, which allows multiple scenes — each with its own capture and device configuration — but only one runs at once).
+
+### Screen Sync
+
+Screen Sync scenes continuously capture the screen and drives your lights in real time:
+
+1. Create a new scene and set the trigger to **Screen Sync**.
+2. Select a **capture source**: full monitor, a custom region drawn on screen, a specific window, or the active window.
+3. Choose a **color mode**: single color (all lights match the dominant color) or multi-color (lights follow distinct screen zones via spatial grid or scene palette).
+4. Assign the lights that should follow the screen under **Devices**.
+5. Tune **brightness**, **smoothing**, **scene-cut detection**, and the **assignment strategy** in the advanced tabs.
+6. Click the **play** button in the sidebar or scene list to start. A live color preview and performance stats appear while running.
 
 ### Settings
 
@@ -155,33 +168,39 @@ The file is human-readable and can be edited manually, though the app overwrites
 ## Architecture Overview
 
 ```
-┌─────────────────────────────────────────────────┐
-│                  Wails Desktop App               │
-│                                                  │
-│  ┌──────────────────┐    ┌────────────────────┐  │
-│  │  React Frontend  │    │    Go Backend       │  │
-│  │  (TypeScript)    │◄──►│    (app.go)         │  │
-│  │                  │    │                     │  │
-│  │  Lights tab      │    │  ┌───────────────┐  │  │
-│  │  Scenes tab      │    │  │ LightManager  │  │  │
-│  │  Settings tab    │    │  │  LIFX / Hue   │  │  │
-│  │                  │    │  │  Elgato/Govee │  │  │
-│  │  useLightStore   │    │  └───────────────┘  │  │
-│  │  (optimistic UI) │    │                     │  │
-│  └──────────────────┘    │  ┌───────────────┐  │  │
-│                          │  │ SceneManager  │  │  │
-│   Events (Wails IPC):    │  └───────────────┘  │  │
-│   camera:state ──────────►                     │  │
-│   scene:active ◄─────────  ┌───────────────┐  │  │
-│   scan:progress ◄────────  │ WebcamMonitor │  │  │
-│   monitoring:state ◄─────  └───────────────┘  │  │
-│                          │                     │  │
-│                          │  ┌───────────────┐  │  │
-│                          │  │    Store      │  │  │
-│                          │  │ (config.json) │  │  │
-│                          │  └───────────────┘  │  │
-│                          └────────────────────┘  │
-└─────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────┐
+│                   Wails Desktop App                   │
+│                                                       │
+│  ┌───────────────────┐    ┌─────────────────────────┐ │
+│  │  React Frontend   │    │      Go Backend          │ │
+│  │  (TypeScript)     │◄──►│      (app.go)            │ │
+│  │                   │    │                          │ │
+│  │  Lights tab       │    │  ┌────────────────────┐  │ │
+│  │  Scenes tab       │    │  │   LightManager     │  │ │
+│  │  Settings tab     │    │  │  LIFX / Hue        │  │ │
+│  │                   │    │  │  Elgato / Govee    │  │ │
+│  │  useLightStore    │    │  └────────────────────┘  │ │
+│  │  (optimistic UI)  │    │                          │ │
+│  └───────────────────┘    │  ┌────────────────────┐  │ │
+│                           │  │   SceneManager     │  │ │
+│   Events (Wails IPC):     │  └────────────────────┘  │ │
+│   camera:state ───────────►                          │ │
+│   scene:active ◄──────────  ┌────────────────────┐  │ │
+│   scan:progress ◄─────────  │  WebcamMonitor     │  │ │
+│   monitoring:state ◄──────  └────────────────────┘  │ │
+│   screensync:colors ◄─────                          │ │
+│   screensync:stats ◄──────  ┌────────────────────┐  │ │
+│   screensync:state ◄──────  │  ScreenSync Engine │  │ │
+│                           │  │  capture → extract │  │ │
+│                           │  │  → process → send  │  │ │
+│                           │  └────────────────────┘  │ │
+│                           │                          │ │
+│                           │  ┌────────────────────┐  │ │
+│                           │  │      Store         │  │ │
+│                           │  │  (config.json)     │  │ │
+│                           │  └────────────────────┘  │ │
+│                           └─────────────────────────┘ │
+└──────────────────────────────────────────────────────┘
 ```
 
 See [`docs/architecture.md`](docs/architecture.md) for the full architecture deep-dive.
@@ -203,15 +222,45 @@ lightsync/
 │   │   ├── controller.go      # Controller interface
 │   │   ├── manager.go         # Routes calls to brand controllers
 │   │   ├── lifx.go            # LIFX LAN UDP controller
-│   │   ├── hue.go             # Philips Hue HTTP controller
+│   │   ├── hue.go             # Philips Hue HTTP controller (HTTP/2, connection pooling)
 │   │   ├── elgato.go          # Elgato Key Light HTTP controller
-│   │   └── govee.go           # Govee LAN controller
+│   │   └── govee.go           # Govee LAN controller (single-packet color updates)
 │   ├── discovery/
 │   │   └── scanner.go         # Multi-protocol network scanner
 │   ├── scenes/
 │   │   └── manager.go         # Scene CRUD, trigger handling
+│   ├── screensync/            # Screen Sync engine
+│   │   ├── engine.go          # Orchestrates capture → extract → process → assign → send
+│   │   ├── handoff.go         # Per-device color crossfade on assignment changes
+│   │   ├── stats.go           # Per-second performance metrics
+│   │   ├── assign/            # Color-to-device assignment strategies
+│   │   │   ├── assigner.go    # Assigner interface + factory
+│   │   │   ├── flow_track.go  # EMA trajectory + Hungarian solve
+│   │   │   ├── identity_lock.go  # Anchor-based stable assignment
+│   │   │   ├── scene_cut_remap.go # Full remap on scene cuts
+│   │   │   ├── zone_dominant.go  # Permanent positional binding
+│   │   │   ├── distance.go    # Color distance helpers
+│   │   │   └── solver.go      # Jonker-Volgenant Hungarian algorithm
+│   │   ├── capture/           # Screen capture backends
+│   │   │   ├── capture.go     # Capturer interface + factory
+│   │   │   ├── dxgi_windows.go   # DXGI desktop duplication (Windows)
+│   │   │   ├── gdi_windows.go    # GDI BitBlt fallback (Windows)
+│   │   │   ├── window_windows.go # Window enumeration + capture
+│   │   │   ├── overlay_windows.go # Region-select full-screen overlay
+│   │   │   ├── monitor.go     # MonitorInfo, GetMonitors
+│   │   │   └── region.go      # CaptureRect helpers
+│   │   ├── extract/           # Color extraction algorithms
+│   │   │   ├── extract.go     # DispatchExtractor, single/multi dispatch
+│   │   │   ├── dominant.go    # Dominant / brightest / saturated / vivid
+│   │   │   ├── palette.go     # Scene palette (histogram accumulation)
+│   │   │   └── spatial.go     # Spatial grid (per-zone extraction)
+│   │   └── process/           # Post-extraction processing
+│   │       ├── adjustments.go # Hue correction, saturation boost, brightness clamp
+│   │       ├── scenechange.go # Scene-cut detection (brightness + hue jump)
+│   │       └── smoother.go    # Adaptive EMA color + windowed brightness smoothing
 │   ├── store/
-│   │   └── store.go           # JSON persistence layer
+│   │   ├── store.go           # JSON persistence layer
+│   │   └── screensync_types.go # ScreenSyncConfig and enums
 │   └── webcam/
 │       ├── monitor.go         # Polling loop, state-change events
 │       ├── camera_windows.go  # Windows registry detection
@@ -219,17 +268,33 @@ lightsync/
 │
 ├── frontend/
 │   └── src/
-│       ├── App.tsx            # Root component, tab routing
+│       ├── App.tsx            # Root component, tab routing + popup mode
 │       ├── components/
-│       │   ├── Layout.tsx     # Sidebar, status bar
-│       │   ├── Lights.tsx     # Device list, scan UI
-│       │   ├── Scenes.tsx     # Scene list and editor
-│       │   ├── Settings.tsx   # App preferences, Hue pairing
-│       │   └── ui/            # Reusable UI primitives (ColorPanel, ColorPicker, LightCard, etc.)
+│       │   ├── Layout.tsx          # Sidebar with scene play/stop, last-scene restore
+│       │   ├── Lights.tsx          # Device list, scan UI
+│       │   ├── LightsPopupPage.tsx # Detached lights popup window
+│       │   ├── Scenes.tsx          # Scene list and editor
+│       │   ├── SceneRow.tsx        # Expandable scene card with Screen Sync preview
+│       │   ├── Settings.tsx        # App preferences, Hue pairing
+│       │   ├── CloseConfirmDialog.tsx  # Minimize vs quit dialog
+│       │   ├── screensync/         # Screen Sync editor components
+│       │   │   ├── ScreenSyncEditor.tsx    # Tab container
+│       │   │   ├── CaptureTab.tsx          # Source selection
+│       │   │   ├── ColorsTab.tsx           # Extraction settings
+│       │   │   ├── BrightnessTab.tsx       # Brightness mode + range
+│       │   │   ├── TransitionsTab.tsx      # Smoothing + assignment engine
+│       │   │   ├── DevicesTab.tsx          # Device assignment
+│       │   │   ├── SetupWizard.tsx         # First-run setup flow
+│       │   │   ├── ScreenSyncSidebarWidget.tsx  # Live stats in sidebar
+│       │   │   ├── ColorPreview.tsx        # Live color swatches
+│       │   │   ├── MonitorSelector.tsx     # Monitor grid picker
+│       │   │   ├── SpatialGridPreview.tsx  # Device-to-zone mapping preview
+│       │   │   └── WindowPicker.tsx        # Window thumbnail list
+│       │   └── ui/            # Reusable UI primitives
 │       ├── hooks/
-│       │   └── useLightStore.ts  # External store with optimistic updates
+│       │   └── useLightStore.ts  # External store with optimistic updates + Screen Sync bridge
 │       └── lib/
-│           ├── types.ts       # TypeScript type definitions
+│           ├── types.ts       # TypeScript type definitions (incl. ScreenSyncConfig)
 │           └── utils.ts       # Color conversion, Kelvin → CSS
 │
 ├── build/                     # Build assets (icons, manifests)

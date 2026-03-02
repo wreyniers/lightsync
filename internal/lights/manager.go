@@ -103,7 +103,6 @@ func (m *Manager) SetDeviceState(ctx context.Context, deviceID string, state Dev
 	if err != nil {
 		return err
 	}
-	log.Printf("[manager] SetDeviceState %s: on=%v brightness=%.2f", deviceID, state.On, state.Brightness)
 	return ctrl.SetState(ctx, deviceID, state)
 }
 
@@ -182,6 +181,11 @@ func (m *Manager) Close() error {
 }
 
 func brandFromDeviceID(id string) Brand {
+	return BrandFromDeviceID(id)
+}
+
+// BrandFromDeviceID returns the brand from a device ID (e.g. "lifx:xx" → BrandLIFX).
+func BrandFromDeviceID(id string) Brand {
 	parts := strings.SplitN(id, ":", 2)
 	if len(parts) < 2 {
 		return ""

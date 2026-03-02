@@ -14,8 +14,16 @@ export function CheckCameraNow() {
   return window['go']['main']['App']['CheckCameraNow']();
 }
 
+export function CloneScene(arg1) {
+  return window['go']['main']['App']['CloneScene'](arg1);
+}
+
 export function CreateScene(arg1) {
   return window['go']['main']['App']['CreateScene'](arg1);
+}
+
+export function DeactivateScene() {
+  return window['go']['main']['App']['DeactivateScene']();
 }
 
 export function DeleteScene(arg1) {
@@ -38,6 +46,14 @@ export function GetCameraState() {
   return window['go']['main']['App']['GetCameraState']();
 }
 
+export function GetCapturePreview() {
+  return window['go']['main']['App']['GetCapturePreview']();
+}
+
+export function GetDefaultScreenSyncConfig() {
+  return window['go']['main']['App']['GetDefaultScreenSyncConfig']();
+}
+
 export function GetDevices() {
   return window['go']['main']['App']['GetDevices']();
 }
@@ -46,8 +62,16 @@ export function GetHueBridges() {
   return window['go']['main']['App']['GetHueBridges']();
 }
 
+export function GetLastSceneID() {
+  return window['go']['main']['App']['GetLastSceneID']();
+}
+
 export function GetLightState(arg1) {
   return window['go']['main']['App']['GetLightState'](arg1);
+}
+
+export function GetMonitors() {
+  return window['go']['main']['App']['GetMonitors']();
 }
 
 export function GetScene(arg1) {
@@ -58,8 +82,20 @@ export function GetScenes() {
   return window['go']['main']['App']['GetScenes']();
 }
 
+export function GetScreenSyncState() {
+  return window['go']['main']['App']['GetScreenSyncState']();
+}
+
 export function GetSettings() {
   return window['go']['main']['App']['GetSettings']();
+}
+
+export function GetWindowThumbnail(arg1) {
+  return window['go']['main']['App']['GetWindowThumbnail'](arg1);
+}
+
+export function GetWindows() {
+  return window['go']['main']['App']['GetWindows']();
 }
 
 export function IsMonitoringEnabled() {
@@ -68,6 +104,10 @@ export function IsMonitoringEnabled() {
 
 export function PairHueBridge(arg1) {
   return window['go']['main']['App']['PairHueBridge'](arg1);
+}
+
+export function QuitApp() {
+  return window['go']['main']['App']['QuitApp']();
 }
 
 export function RemoveDevice(arg1) {
@@ -90,6 +130,14 @@ export function SetMonitoringEnabled(arg1) {
   return window['go']['main']['App']['SetMonitoringEnabled'](arg1);
 }
 
+export function StartRegionSelect() {
+  return window['go']['main']['App']['StartRegionSelect']();
+}
+
+export function StopScreenSync() {
+  return window['go']['main']['App']['StopScreenSync']();
+}
+
 export function TurnOffLight(arg1) {
   return window['go']['main']['App']['TurnOffLight'](arg1);
 }
@@ -100,6 +148,10 @@ export function TurnOnLight(arg1) {
 
 export function UpdateScene(arg1) {
   return window['go']['main']['App']['UpdateScene'](arg1);
+}
+
+export function UpdateScreenSyncConfig(arg1, arg2) {
+  return window['go']['main']['App']['UpdateScreenSyncConfig'](arg1, arg2);
 }
 
 export function UpdateSettings(arg1) {

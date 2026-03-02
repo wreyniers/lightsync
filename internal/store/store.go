@@ -19,6 +19,9 @@ type Scene struct {
 	// be restored when the scene is re-opened for editing.
 	GlobalColor  *lights.Color `json:"globalColor,omitempty"`
 	GlobalKelvin *int          `json:"globalKelvin,omitempty"`
+	// ScreenSync holds the full configuration for Screen Sync scenes.
+	// Present only when Trigger == "screen_sync".
+	ScreenSync *ScreenSyncConfig `json:"screenSync,omitempty"`
 }
 
 type Settings struct {
@@ -32,7 +35,8 @@ type Config struct {
 	Scenes   []Scene         `json:"scenes"`
 	Settings Settings        `json:"settings"`
 
-	HueBridges []HueBridge `json:"hueBridges,omitempty"`
+	HueBridges  []HueBridge `json:"hueBridges,omitempty"`
+	LastSceneID string      `json:"lastSceneId,omitempty"`
 }
 
 type HueBridge struct {
@@ -118,6 +122,19 @@ func (s *Store) SetHueBridges(bridges []HueBridge) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.config.HueBridges = bridges
+	return s.saveLocked()
+}
+
+func (s *Store) GetLastSceneID() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.config.LastSceneID
+}
+
+func (s *Store) SetLastSceneID(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.config.LastSceneID = id
 	return s.saveLocked()
 }
 
