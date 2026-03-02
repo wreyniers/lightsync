@@ -49,11 +49,13 @@ func (c *LIFXController) Discover(ctx context.Context) ([]Device, error) {
 			continue
 		}
 		seen[target] = true
+		log.Printf("[lifx] Got response from device %s", target)
 
 		labelCtx, labelCancel := context.WithTimeout(ctx, 2*time.Second)
 		ld, err := light.Wrap(labelCtx, raw, false)
 		labelCancel()
 		if err != nil {
+			log.Printf("[lifx] Failed to wrap device %s (dropped): %v", target, err)
 			continue
 		}
 

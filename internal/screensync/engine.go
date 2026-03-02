@@ -161,9 +161,13 @@ func (e *Engine) Stop() {
 	}
 
 	// Wait for run() to finish so DXGI resources are released before a
-	// subsequent Start() tries to create new ones.
+	// subsequent Start() tries to create new ones. Cap at 2s to avoid
+	// blocking Wails' shutdown sequence (which needs the UI thread free).
 	if done != nil {
-		<-done
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+		}
 	}
 
 	// Clear stale preview so the popup doesn't show an old frame.
@@ -349,7 +353,11 @@ func (e *Engine) run(ctx context.Context) {
 
 		img, err := capturer.Capture()
 		if err != nil {
-			time.Sleep(500 * time.Millisecond)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(500 * time.Millisecond):
+			}
 			continue
 		}
 		captureEnd := time.Now()

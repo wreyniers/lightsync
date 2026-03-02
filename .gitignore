@@ -6,3 +6,4 @@ frontend/dist
 .dev.pid
 .dev.log
 .dev.log.err
+.task/checksum/*

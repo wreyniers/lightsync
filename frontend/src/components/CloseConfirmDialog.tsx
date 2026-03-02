@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { MinusCircle, LogOut, X } from "lucide-react";
+import { MinusCircle, LogOut, X, Loader2 } from "lucide-react";
 import { Events, Window } from "@wailsio/runtime";
 import { App } from "@bindings";
 
@@ -10,6 +10,7 @@ import { App } from "@bindings";
  */
 export function CloseConfirmDialog() {
   const [visible, setVisible] = useState(false);
+  const [shuttingDown, setShuttingDown] = useState(false);
 
   useEffect(() => {
     const off = Events.On("window:close-requested", () => setVisible(true));
@@ -24,7 +25,7 @@ export function CloseConfirmDialog() {
   };
 
   const handleQuit = () => {
-    setVisible(false);
+    setShuttingDown(true);
     App.QuitApp();
   };
 
@@ -37,52 +38,60 @@ export function CloseConfirmDialog() {
         className="relative w-80 rounded-2xl border border-border bg-card shadow-2xl p-6"
         style={{ boxShadow: "0 25px 60px rgba(0,0,0,0.5)" }}
       >
-        {/* Dismiss without action — only hides the dialog, does not close the window */}
-        <button
-          type="button"
-          onClick={() => setVisible(false)}
-          className="absolute top-3 right-3 h-7 w-7 flex items-center justify-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-white/10 transition-colors"
-          title="Cancel"
-        >
-          <X className="h-4 w-4" />
-        </button>
+        {shuttingDown ? (
+          <div className="flex flex-col items-center gap-3 py-4">
+            <Loader2 className="h-6 w-6 text-muted-foreground animate-spin" />
+            <p className="text-sm text-muted-foreground">Shutting down…</p>
+          </div>
+        ) : (
+          <>
+            <button
+              type="button"
+              onClick={() => setVisible(false)}
+              className="absolute top-3 right-3 h-7 w-7 flex items-center justify-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-white/10 transition-colors"
+              title="Cancel"
+            >
+              <X className="h-4 w-4" />
+            </button>
 
-        <div className="mb-5">
-          <h2 className="text-base font-semibold">Close LightSync?</h2>
-          <p className="text-sm text-muted-foreground mt-1">
-            Choose what happens when you close the window.
-          </p>
-        </div>
+            <div className="mb-5">
+              <h2 className="text-base font-semibold">Close LightSync?</h2>
+              <p className="text-sm text-muted-foreground mt-1">
+                Choose what happens when you close the window.
+              </p>
+            </div>
 
-        <div className="space-y-2">
-          <button
-            type="button"
-            onClick={handleMinimize}
-            className="w-full flex items-center gap-3 rounded-xl px-4 py-3 text-left bg-secondary hover:bg-primary/10 hover:text-primary transition-colors group"
-          >
-            <div className="h-9 w-9 shrink-0 rounded-lg bg-primary/10 group-hover:bg-primary/20 flex items-center justify-center transition-colors">
-              <MinusCircle className="h-4.5 w-4.5 text-primary" />
-            </div>
-            <div>
-              <p className="text-sm font-medium">Minimize to Tray</p>
-              <p className="text-xs text-muted-foreground">Keep running in the background</p>
-            </div>
-          </button>
+            <div className="space-y-2">
+              <button
+                type="button"
+                onClick={handleMinimize}
+                className="w-full flex items-center gap-3 rounded-xl px-4 py-3 text-left bg-secondary hover:bg-primary/10 hover:text-primary transition-colors group"
+              >
+                <div className="h-9 w-9 shrink-0 rounded-lg bg-primary/10 group-hover:bg-primary/20 flex items-center justify-center transition-colors">
+                  <MinusCircle className="h-4.5 w-4.5 text-primary" />
+                </div>
+                <div>
+                  <p className="text-sm font-medium">Minimize to Tray</p>
+                  <p className="text-xs text-muted-foreground">Keep running in the background</p>
+                </div>
+              </button>
 
-          <button
-            type="button"
-            onClick={handleQuit}
-            className="w-full flex items-center gap-3 rounded-xl px-4 py-3 text-left bg-secondary hover:bg-destructive/10 hover:text-destructive transition-colors group"
-          >
-            <div className="h-9 w-9 shrink-0 rounded-lg bg-destructive/10 group-hover:bg-destructive/20 flex items-center justify-center transition-colors">
-              <LogOut className="h-4.5 w-4.5 text-destructive" />
+              <button
+                type="button"
+                onClick={handleQuit}
+                className="w-full flex items-center gap-3 rounded-xl px-4 py-3 text-left bg-secondary hover:bg-destructive/10 hover:text-destructive transition-colors group"
+              >
+                <div className="h-9 w-9 shrink-0 rounded-lg bg-destructive/10 group-hover:bg-destructive/20 flex items-center justify-center transition-colors">
+                  <LogOut className="h-4.5 w-4.5 text-destructive" />
+                </div>
+                <div>
+                  <p className="text-sm font-medium">Exit LightSync</p>
+                  <p className="text-xs text-muted-foreground">Quit the application entirely</p>
+                </div>
+              </button>
             </div>
-            <div>
-              <p className="text-sm font-medium">Exit LightSync</p>
-              <p className="text-xs text-muted-foreground">Quit the application entirely</p>
-            </div>
-          </button>
-        </div>
+          </>
+        )}
       </div>
     </div>
   );

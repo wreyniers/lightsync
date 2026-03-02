@@ -9,6 +9,7 @@ import (
 	"image/png"
 	"io"
 	"log/slog"
+	"os"
 	"strings"
 	"time"
 
@@ -163,17 +164,49 @@ func (a *App) ServiceStartup(ctx context.Context, _ application.ServiceOptions) 
 }
 
 func (a *App) ServiceShutdown() error {
-	a.shutdown()
+	done := make(chan struct{})
+	go func() {
+		a.shutdown()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(4 * time.Second):
+		slog.Warn("Shutdown timed out after 4s, proceeding")
+	}
 	return nil
 }
 
 func (a *App) shutdown() {
 	if a.screenSyncEngine != nil {
-		a.screenSyncEngine.Stop()
+		safeStop(a.screenSyncEngine.Stop)
 	}
+
+	// Brief delay so in-flight light send goroutines (from the last frame) can finish
+	// before we close the light manager. They use a 2s timeout max.
+	time.Sleep(300 * time.Millisecond)
+
 	if a.lightManager != nil {
-		_ = a.lightManager.Close()
+		safeClose(a.lightManager.Close)
 	}
+}
+
+func safeStop(fn func()) {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Warn("Recovered from panic during engine stop", "panic", r)
+		}
+	}()
+	fn()
+}
+
+func safeClose(fn func() error) {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Warn("Recovered from panic during close", "panic", r)
+		}
+	}()
+	_ = fn()
 }
 
 // --- Discovery ---
@@ -385,6 +418,19 @@ func (a *App) DeactivateScene() {
 
 func (a *App) QuitApp() {
 	a.quitConfirmed = true
+
+	// Safety net: Wails' Quit() blocks indefinitely in WebView2 teardown on
+	// Windows (AppHangXProcB1). Our ServiceShutdown completes in ~300ms, so
+	// give it 1.5s total then force-exit.
+	go func() {
+		time.Sleep(1500 * time.Millisecond)
+		os.Exit(0)
+	}()
+
+	if popupWindow != nil {
+		popupWindow.Close()
+	}
+
 	application.Get().Quit()
 }
 

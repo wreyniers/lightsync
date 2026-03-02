@@ -5,37 +5,30 @@ import (
 )
 
 var (
-	popupWindow   *application.WebviewWindow
-	popupURL      = "/#lights-popup"
-	popupLoaded   bool
+	popupWindow *application.WebviewWindow
+	popupURL    = "/#lights-popup"
 )
 
-func (a *App) initPopupWindow() {
-	wailsApp := application.Get()
-	// Create with about:blank so it doesn't load the full SPA at startup.
-	// Loading both main window and popup in parallel doubles GetLightState calls
-	// before controller caches are warm. We load the popup URL when user opens it.
-	popupWindow = wailsApp.Window.NewWithOptions(application.WebviewWindowOptions{
-		Name:   "lights",
-		Title:  "Lights",
-		Width:  420,
-		Height: 660,
-		Hidden: true,
-		URL:    "about:blank",
-		Windows: application.WindowsWindow{
-			Theme: application.Dark,
-		},
-	})
-}
+// initPopupWindow is intentionally a no-op. The popup window is created lazily
+// on first open to avoid having two WebView2 controller instances at startup.
+// Multiple WebView2 instances cause a cross-process deadlock (AppHangXProcB1)
+// when Wails tears them down on Windows.
+func (a *App) initPopupWindow() {}
 
-// OpenLightsPopup shows the lights popup window. Called from the frontend.
+// OpenLightsPopup shows the lights popup window. Created on first call.
 func (a *App) OpenLightsPopup() {
 	if popupWindow == nil {
-		return
-	}
-	if !popupLoaded {
-		popupWindow.SetURL(popupURL)
-		popupLoaded = true
+		wailsApp := application.Get()
+		popupWindow = wailsApp.Window.NewWithOptions(application.WebviewWindowOptions{
+			Name:   "lights",
+			Title:  "Lights",
+			Width:  420,
+			Height: 660,
+			URL:    popupURL,
+			Windows: application.WindowsWindow{
+				Theme: application.Dark,
+			},
+		})
 	}
 	popupWindow.Show()
 	popupWindow.Focus()

@@ -161,7 +161,7 @@ export function IsMonitoringEnabled(): $CancellablePromise<boolean> {
 }
 
 /**
- * OpenLightsPopup shows the lights popup window. Called from the frontend.
+ * OpenLightsPopup shows the lights popup window. Created on first call.
  */
 export function OpenLightsPopup(): $CancellablePromise<void> {
     return $Call.ByID(1945892682);

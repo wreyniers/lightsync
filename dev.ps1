@@ -120,7 +120,7 @@ function Build-App {
 
     Push-Location $PSScriptRoot
     try {
-        & $Wails3Exe task build -p PRODUCTION=true
+        & $Wails3Exe task windows:build:production
         if ($LASTEXITCODE -eq 0) {
             $exe = Join-Path $PSScriptRoot 'bin\lightsync.exe'
             if (Test-Path $exe) {
@@ -133,8 +133,13 @@ function Build-App {
                 if (-not (Test-Path $buildBinDir)) {
                     New-Item -ItemType Directory -Path $buildBinDir -Force | Out-Null
                 }
-                Copy-Item $exe $buildBinExe -Force
-                Write-Host "Copied to build\bin\lightsync.exe" -ForegroundColor DarkGray
+                try {
+                    Copy-Item $exe $buildBinExe -Force
+                    Write-Host "Copied to build\bin\lightsync.exe" -ForegroundColor DarkGray
+                }
+                catch {
+                    Write-Host "Could not copy to build\bin (close LightSync if running): $_" -ForegroundColor Yellow
+                }
             }
         }
         else {

@@ -52,8 +52,16 @@ func (c *GoveeController) Discover(ctx context.Context) ([]Device, error) {
 	time.Sleep(3 * time.Second)
 
 	devices := c.controller.Devices()
-	var result []Device
 
+	if len(devices) == 0 {
+		// No Govee devices on the network — shut down the background goroutines
+		// so the UDP listener and periodic scanner don't run needlessly.
+		_ = c.Close()
+		log.Printf("[govee] Found 0 device(s), stopped controller")
+		return nil, nil
+	}
+
+	var result []Device
 	c.mu.Lock()
 	for _, d := range devices {
 		ip := d.IP()
@@ -151,9 +159,20 @@ func (c *GoveeController) TurnOff(_ context.Context, deviceID string) error {
 func (c *GoveeController) Close() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.started {
+	if !c.started {
+		return nil
+	}
+	c.started = false
+
+	done := make(chan struct{})
+	go func() {
 		c.controller.Shutdown()
-		c.started = false
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		slog.Warn("Govee controller shutdown timed out")
 	}
 	return nil
 }
