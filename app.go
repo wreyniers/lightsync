@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -43,6 +44,9 @@ type App struct {
 	screenSyncEngine      *screensync.Engine
 	screenSyncActiveScene string
 	preSyncStates        map[string]lights.DeviceState
+
+	lightRefreshMu     sync.Mutex
+	lightRefreshCancel context.CancelFunc
 
 	quitConfirmed bool
 }
@@ -154,6 +158,10 @@ func (a *App) ServiceStartup(ctx context.Context, _ application.ServiceOptions) 
 	})
 	go a.webcamMon.Start(ctx)
 
+	refreshCtx, refreshCancel := context.WithCancel(context.Background())
+	a.lightRefreshCancel = refreshCancel
+	go a.runPeriodicLightRefresh(refreshCtx)
+
 	a.setupTray()
 	a.initPopupWindow()
 
@@ -183,6 +191,11 @@ func (a *App) ServiceShutdown() error {
 }
 
 func (a *App) shutdown() {
+	if a.lightRefreshCancel != nil {
+		a.lightRefreshCancel()
+		a.lightRefreshCancel = nil
+	}
+
 	if a.screenSyncEngine != nil {
 		safeStop(a.screenSyncEngine.Stop)
 	}
@@ -214,6 +227,64 @@ func safeClose(fn func() error) {
 	_ = fn()
 }
 
+func (a *App) runPeriodicLightRefresh(ctx context.Context) {
+	first := true
+	for {
+		if a.store == nil {
+			return
+		}
+		s := a.store.GetSettings()
+		var wait time.Duration
+		if first {
+			wait = time.Duration(s.LightRefreshFirstDelayMinutes) * time.Minute
+			first = false
+		} else {
+			wait = time.Duration(s.LightRefreshIntervalMinutes) * time.Minute
+		}
+		if wait < time.Minute {
+			wait = time.Minute
+		}
+
+		t := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			t.Stop()
+			return
+		case <-t.C:
+			t.Stop()
+			s2 := a.store.GetSettings()
+			timeout := time.Duration(s2.LightRefreshTimeoutSeconds) * time.Second
+			if timeout < 10*time.Second {
+				timeout = 10 * time.Second
+			}
+			a.refreshLightConnections(timeout)
+		}
+	}
+}
+
+func (a *App) refreshLightConnections(timeout time.Duration) {
+	if a.lightManager == nil || a.store == nil {
+		return
+	}
+	a.lightRefreshMu.Lock()
+	defer a.lightRefreshMu.Unlock()
+
+	rctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	_, err := a.lightManager.DiscoverAllWithProgress(rctx, nil)
+	if err != nil {
+		slog.Warn("Periodic light refresh failed", "err", err)
+		return
+	}
+	if err := a.store.SetDevices(a.lightManager.GetDevices()); err != nil {
+		slog.Warn("Periodic light refresh: failed to save devices", "err", err)
+		return
+	}
+	slog.Info("Periodic light refresh completed")
+	application.Get().Event.Emit("lights:refreshed", nil)
+}
+
 // --- Discovery ---
 
 type DiscoverResult struct {
@@ -222,6 +293,9 @@ type DiscoverResult struct {
 }
 
 func (a *App) DiscoverLights() DiscoverResult {
+	a.lightRefreshMu.Lock()
+	defer a.lightRefreshMu.Unlock()
+
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
@@ -501,6 +575,7 @@ func (a *App) OpenConfigFile() error {
 }
 
 func (a *App) UpdateSettings(settings store.Settings) error {
+	store.NormalizeSettings(&settings)
 	if settings.PollIntervalMs > 0 {
 		a.webcamMon.SetInterval(time.Duration(settings.PollIntervalMs) * time.Millisecond)
 	}
@@ -713,3 +788,6 @@ func (a *App) GetCapturePreview() string {
 	}
 	return base64.StdEncoding.EncodeToString(data)
 }
+
+
+

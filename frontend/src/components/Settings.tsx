@@ -83,6 +83,9 @@ export function Settings() {
     pollIntervalMs: 1000,
     startMinimized: false,
     launchAtLogin: false,
+    lightRefreshFirstDelayMinutes: 10,
+    lightRefreshIntervalMinutes: 15,
+    lightRefreshTimeoutSeconds: 45,
   });
   const [bridges, setBridges] = useState<HueBridgeInfo[]>([]);
   const [webcamMonitoring, setWebcamMonitoring] = useState(true);
@@ -499,6 +502,85 @@ export function Settings() {
           <div className="flex justify-between text-xs text-muted-foreground mt-1">
             <span>250ms (fast)</span>
             <span>5000ms (slow)</span>
+          </div>
+        </div>
+
+        <div className="border-t border-border pt-5 space-y-5">
+          <div>
+            <p className="text-sm font-medium mb-1">Background light refresh</p>
+            <p className="text-xs text-muted-foreground mb-4">
+              Periodically re-discovers lights on your network (same as the light
+              query step of &quot;Scan for lights&quot;) so controller connections stay
+              fresh. Lower intervals use more network activity.
+            </p>
+          </div>
+
+          <div>
+            <label className="text-sm font-medium mb-1 block">
+              First run after startup: {settings.lightRefreshFirstDelayMinutes}{" "}
+              min
+            </label>
+            <p className="text-xs text-muted-foreground mb-3">
+              Wait this long after launch before the first automatic refresh.
+            </p>
+            <Slider
+              value={settings.lightRefreshFirstDelayMinutes}
+              min={1}
+              max={180}
+              step={1}
+              onChange={(v) =>
+                setSettings((s) => ({ ...s, lightRefreshFirstDelayMinutes: v }))
+              }
+            />
+            <div className="flex justify-between text-xs text-muted-foreground mt-1">
+              <span>1 min</span>
+              <span>180 min</span>
+            </div>
+          </div>
+
+          <div>
+            <label className="text-sm font-medium mb-1 block">
+              Repeat every: {settings.lightRefreshIntervalMinutes} min
+            </label>
+            <p className="text-xs text-muted-foreground mb-3">
+              How often to run another refresh while the app stays open.
+            </p>
+            <Slider
+              value={settings.lightRefreshIntervalMinutes}
+              min={1}
+              max={180}
+              step={1}
+              onChange={(v) =>
+                setSettings((s) => ({ ...s, lightRefreshIntervalMinutes: v }))
+              }
+            />
+            <div className="flex justify-between text-xs text-muted-foreground mt-1">
+              <span>1 min</span>
+              <span>180 min</span>
+            </div>
+          </div>
+
+          <div>
+            <label className="text-sm font-medium mb-1 block">
+              Discovery timeout: {settings.lightRefreshTimeoutSeconds}s
+            </label>
+            <p className="text-xs text-muted-foreground mb-3">
+              Maximum time allowed for each refresh attempt. Increase if discovery
+              often fails on slow networks.
+            </p>
+            <Slider
+              value={settings.lightRefreshTimeoutSeconds}
+              min={10}
+              max={300}
+              step={5}
+              onChange={(v) =>
+                setSettings((s) => ({ ...s, lightRefreshTimeoutSeconds: v }))
+              }
+            />
+            <div className="flex justify-between text-xs text-muted-foreground mt-1">
+              <span>10s</span>
+              <span>300s</span>
+            </div>
           </div>
         </div>
 

@@ -25,9 +25,16 @@ type Scene struct {
 }
 
 type Settings struct {
-	PollIntervalMs int  `json:"pollIntervalMs"`
+	PollIntervalMs int `json:"pollIntervalMs"`
 	StartMinimized bool `json:"startMinimized"`
 	LaunchAtLogin  bool `json:"launchAtLogin"`
+	// LightRefreshFirstDelayMinutes is how long after startup before the first
+	// background light re-discovery runs.
+	LightRefreshFirstDelayMinutes int `json:"lightRefreshFirstDelayMinutes"`
+	// LightRefreshIntervalMinutes is how often subsequent re-discoveries run.
+	LightRefreshIntervalMinutes int `json:"lightRefreshIntervalMinutes"`
+	// LightRefreshTimeoutSeconds is the per-attempt network timeout for that discovery.
+	LightRefreshTimeoutSeconds int `json:"lightRefreshTimeoutSeconds"`
 }
 
 type Config struct {
@@ -61,7 +68,10 @@ func New() (*Store, error) {
 		filePath: p,
 		config: Config{
 			Settings: Settings{
-				PollIntervalMs: 1000,
+				PollIntervalMs:                DefaultPollIntervalMs,
+				LightRefreshFirstDelayMinutes: DefaultLightRefreshFirstDelayMinutes,
+				LightRefreshIntervalMinutes:   DefaultLightRefreshIntervalMinutes,
+				LightRefreshTimeoutSeconds:    DefaultLightRefreshTimeoutSeconds,
 			},
 		},
 	}
@@ -102,10 +112,13 @@ func (s *Store) SetScenes(scenes []Scene) error {
 func (s *Store) GetSettings() Settings {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.config.Settings
+	st := s.config.Settings
+	NormalizeSettings(&st)
+	return st
 }
 
 func (s *Store) SetSettings(settings Settings) error {
+	NormalizeSettings(&settings)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.config.Settings = settings
@@ -175,7 +188,11 @@ func (s *Store) load() error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return json.Unmarshal(data, &s.config)
+	if err := json.Unmarshal(data, &s.config); err != nil {
+		return err
+	}
+	NormalizeSettings(&s.config.Settings)
+	return nil
 }
 
 // saveLocked marshals config and writes atomically. Caller must hold s.mu.

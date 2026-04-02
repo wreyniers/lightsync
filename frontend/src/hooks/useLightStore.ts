@@ -620,6 +620,11 @@ setupSceneActiveListener();
 setupAppLastSceneListener();
 setupScreenSyncToStoreBridge();
 
+// Backend periodically re-discovers lights (same as the settings scan light phase).
+Events.On("lights:refreshed", () => {
+  void refreshDevices();
+});
+
 
 // camera:state fires when webcam turns on/off. The backend then emits scene:active
 // with the full scene — we apply that and do NOT refetch from hardware here.

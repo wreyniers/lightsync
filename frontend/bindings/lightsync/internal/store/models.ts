@@ -518,6 +518,22 @@ export class Settings {
     "startMinimized": boolean;
     "launchAtLogin": boolean;
 
+    /**
+     * LightRefreshFirstDelayMinutes is how long after startup before the first
+     * background light re-discovery runs.
+     */
+    "lightRefreshFirstDelayMinutes": number;
+
+    /**
+     * LightRefreshIntervalMinutes is how often subsequent re-discoveries run.
+     */
+    "lightRefreshIntervalMinutes": number;
+
+    /**
+     * LightRefreshTimeoutSeconds is the per-attempt network timeout for that discovery.
+     */
+    "lightRefreshTimeoutSeconds": number;
+
     /** Creates a new Settings instance. */
     constructor($$source: Partial<Settings> = {}) {
         if (!("pollIntervalMs" in $$source)) {
@@ -528,6 +544,15 @@ export class Settings {
         }
         if (!("launchAtLogin" in $$source)) {
             this["launchAtLogin"] = false;
+        }
+        if (!("lightRefreshFirstDelayMinutes" in $$source)) {
+            this["lightRefreshFirstDelayMinutes"] = 0;
+        }
+        if (!("lightRefreshIntervalMinutes" in $$source)) {
+            this["lightRefreshIntervalMinutes"] = 0;
+        }
+        if (!("lightRefreshTimeoutSeconds" in $$source)) {
+            this["lightRefreshTimeoutSeconds"] = 0;
         }
 
         Object.assign(this, $$source);

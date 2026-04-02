@@ -34,11 +34,11 @@ func main() {
 	mainWindow := wailsApp.Window.NewWithOptions(application.WebviewWindowOptions{
 		Name:          "main",
 		Title:         "LightSync",
-		Width:         2200,
-		Height:        1440,
-		DisableResize: false,
-		MaxWidth:      2200,
-		MaxHeight:     1440,
+		Width:         1080,
+		Height:        720,
+		DisableResize: true,
+		MaxWidth:      1080,
+		MaxHeight:     720,
 		Frameless:     false,
 		BackgroundColour: application.NewRGB(10, 10, 15),
 		Windows: application.WindowsWindow{

@@ -81,7 +81,14 @@ declare module "@bindings/internal/store/models.js" {
     globalKelvin?: number;
   }
   export class Settings {
-    constructor(src?: { pollIntervalMs?: number; startMinimized?: boolean; launchAtLogin?: boolean });
+    constructor(src?: {
+      pollIntervalMs?: number;
+      startMinimized?: boolean;
+      launchAtLogin?: boolean;
+      lightRefreshFirstDelayMinutes?: number;
+      lightRefreshIntervalMinutes?: number;
+      lightRefreshTimeoutSeconds?: number;
+    });
   }
   export class HueBridge {
     constructor(src?: unknown);

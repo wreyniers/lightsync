@@ -34,12 +34,7 @@ func (a *App) setupTray() {
 	mQuit := menu.Add("Quit")
 
 	mShow.OnClick(func(*application.Context) {
-		if a.mainWindow != nil {
-			a.mainWindow.Show()
-			a.mainWindow.SetAlwaysOnTop(true)
-			a.mainWindow.SetAlwaysOnTop(false)
-			a.mainWindow.Focus()
-		}
+		systray.ShowWindow()
 	})
 
 	mToggle.OnClick(func(*application.Context) {
@@ -55,14 +50,24 @@ func (a *App) setupTray() {
 	})
 
 	mQuit.OnClick(func(*application.Context) {
-		wailsApp.Event.Emit("window:close-requested", nil)
+		a.QuitApp()
 	})
 
 	if !a.webcamMon.IsEnabled() {
 		mToggle.SetLabel("Resume Monitoring")
 	}
 
+	if a.mainWindow != nil {
+		systray.AttachWindow(a.mainWindow).WindowOffset(5)
+	}
 	systray.SetMenu(menu)
+	// Left-click: show main window. Right-click: context menu (see applySmartDefaults in Wails SystemTray).
+	systray.OnClick(func() {
+		systray.ShowWindow()
+	})
+	systray.OnRightClick(func() {
+		systray.OpenMenu()
+	})
 }
 
 func trayIcon() []byte {
