@@ -43,6 +43,14 @@ export function Layout({ children, currentPage, onNavigate }: LayoutProps) {
     return () => off?.();
   }, []);
 
+  // Monitoring can be paused from the tray or Settings independently of the camera state.
+  const [monitoring, setMonitoring] = useState(true);
+  useEffect(() => {
+    App.IsMonitoringEnabled().then(setMonitoring).catch(() => {});
+    const off = Events.On("monitoring:state", (e) => setMonitoring(e.data));
+    return () => off?.();
+  }, []);
+
   const lightStore = useLightStore();
   const { lastScene } = lightStore;
   useEffect(() => {
@@ -164,7 +172,7 @@ export function Layout({ children, currentPage, onNavigate }: LayoutProps) {
                 {cameraOn ? "Camera Active" : "Camera Off"}
               </p>
               <p className="text-xs text-muted-foreground mt-0.5">
-                {cameraOn ? "Monitoring webcam" : "Not monitoring"}
+                {monitoring ? "Monitoring webcam" : "Monitoring paused"}
               </p>
             </div>
           </div>
