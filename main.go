@@ -1,14 +1,11 @@
 package main
 
 import (
-	"context"
 	"embed"
+	"log"
 
-	"github.com/wailsapp/wails/v2"
-	"github.com/wailsapp/wails/v2/pkg/options"
-	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
-	"github.com/wailsapp/wails/v2/pkg/options/windows"
-	"github.com/wailsapp/wails/v2/pkg/runtime"
+	"github.com/wailsapp/wails/v3/pkg/application"
+	"github.com/wailsapp/wails/v3/pkg/events"
 )
 
 //go:embed all:frontend/dist
@@ -19,41 +16,48 @@ func main() {
 
 	app := NewApp()
 
-	err := wails.Run(&options.App{
-		Title:         "LightSync",
-		Width:         2200,
-		Height:        1440,
-		DisableResize: false,
-		MaxWidth:      2200,
-		MaxHeight:     1440,
-		Frameless:     false,
-		// Intercept the close button so the frontend can ask the user
-		// whether to minimize to the system tray or quit entirely.
-		// When QuitApp() sets quitConfirmed the flag lets the quit through.
-		OnBeforeClose: func(ctx context.Context) (prevent bool) {
-			if app.quitConfirmed {
-				return false // allow the quit to proceed
-			}
-			runtime.EventsEmit(ctx, "window:close-requested")
-			return true // block; let the frontend dialog decide
+	wailsApp := application.New(application.Options{
+		Name:        "LightSync",
+		Description: "Webcam and screen sync for smart lights",
+		Assets: application.AssetOptions{
+			Handler: application.BundledAssetFileServer(assets),
 		},
-		AssetServer: &assetserver.Options{
-			Assets: assets,
+		Mac: application.MacOptions{
+			ApplicationShouldTerminateAfterLastWindowClosed: false,
 		},
-		BackgroundColour: &options.RGBA{R: 10, G: 10, B: 15, A: 255},
-		OnStartup:        app.startup,
-		OnShutdown:       app.shutdown,
-		Windows: &windows.Options{
-			WebviewIsTransparent: false,
-			WindowIsTranslucent:  false,
-			Theme:                windows.Dark,
-		},
-		Bind: []interface{}{
-			app,
+		Windows: application.WindowsOptions{},
+		Services: []application.Service{
+			application.NewService(app),
 		},
 	})
 
-	if err != nil {
-		println("Error:", err.Error())
+	mainWindow := wailsApp.Window.NewWithOptions(application.WebviewWindowOptions{
+		Name:          "main",
+		Title:         "LightSync",
+		Width:         1080,
+		Height:        720,
+		DisableResize: true,
+		MaxWidth:      1080,
+		MaxHeight:     720,
+		Frameless:     false,
+		BackgroundColour: application.NewRGB(10, 10, 15),
+		Windows: application.WindowsWindow{
+			Theme: application.Dark,
+		},
+	})
+
+	// Intercept close so the frontend can ask: minimize to tray or quit.
+	mainWindow.RegisterHook(events.Common.WindowClosing, func(e *application.WindowEvent) {
+		if app.quitConfirmed {
+			return // allow close to proceed
+		}
+		wailsApp.Event.Emit("window:close-requested", nil)
+		e.Cancel()
+	})
+
+	app.setMainWindow(mainWindow)
+
+	if err := wailsApp.Run(); err != nil {
+		log.Fatal(err)
 	}
 }

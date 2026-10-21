@@ -42,27 +42,43 @@ type ScanProgress struct {
 
 func (s *Scanner) ScanAll(ctx context.Context, onProgress func(ScanProgress)) DiscoveryResult {
 	result := DiscoveryResult{}
+	var progressMu sync.Mutex
 	progress := func(phase, message string, devices []lights.Device) {
 		log.Printf("[discovery] %s", message)
 		if onProgress != nil {
+			progressMu.Lock()
 			onProgress(ScanProgress{Phase: phase, Message: message, Devices: devices})
+			progressMu.Unlock()
 		}
 	}
 
-	progress("elgato", "Searching for Elgato lights...", nil)
-	mdnsFound := s.discoverElgatoViaMDNS(ctx)
-	log.Printf("[discovery] mDNS found %d Elgato device(s)", mdnsFound)
+	// Run Elgato and Hue discovery in parallel — they probe independent
+	// protocols and the subnet scans are the most expensive sequential phases.
+	var wg sync.WaitGroup
 
-	if mdnsFound == 0 {
-		progress("elgato", "Scanning subnet for Elgato lights...", nil)
-		s.discoverElgatoViaProbe(ctx)
-	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		progress("elgato", "Searching for Elgato lights...", nil)
+		mdnsFound := s.discoverElgatoViaMDNS(ctx)
+		log.Printf("[discovery] mDNS found %d Elgato device(s)", mdnsFound)
+		if mdnsFound == 0 {
+			progress("elgato", "Scanning subnet for Elgato lights...", nil)
+			s.discoverElgatoViaProbe(ctx)
+		}
+	}()
 
-	progress("hue", "Searching for Hue bridges...", nil)
-	hueBridges := s.DiscoverHueBridges(ctx)
-	if len(hueBridges) > 0 {
-		progress("hue", fmt.Sprintf("Found %d Hue bridge(s), querying lights...", len(hueBridges)), nil)
-	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		progress("hue", "Searching for Hue bridges...", nil)
+		hueBridges := s.DiscoverHueBridges(ctx)
+		if len(hueBridges) > 0 {
+			progress("hue", fmt.Sprintf("Found %d Hue bridge(s), querying lights...", len(hueBridges)), nil)
+		}
+	}()
+
+	wg.Wait()
 
 	progress("lights", "Querying all bridges and devices for lights...", nil)
 	var totalFound int
@@ -167,14 +183,31 @@ func isElgatoKeyLight(ctx context.Context, ip string) bool {
 	return resp.StatusCode == http.StatusOK
 }
 
+// isVirtualInterface returns true for adapters that are unlikely to host smart
+// home devices (WSL, Docker, Hyper-V, VirtualBox, VMware, etc.).
+func isVirtualInterface(name string) bool {
+	lower := strings.ToLower(name)
+	for _, kw := range []string{"vethernet", "wsl", "docker", "hyper-v", "virtualbox", "vmware", "virbr"} {
+		if strings.Contains(lower, kw) {
+			return true
+		}
+	}
+	return false
+}
+
 func getLocalSubnets() []string {
 	var subnets []string
 	ifaces, err := net.Interfaces()
 	if err != nil {
+		log.Printf("[discovery] getLocalSubnets: net.Interfaces failed: %v", err)
 		return nil
 	}
 	for _, iface := range ifaces {
 		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		if isVirtualInterface(iface.Name) {
+			log.Printf("[discovery] Skipping virtual interface %s", iface.Name)
 			continue
 		}
 		addrs, err := iface.Addrs()
@@ -190,6 +223,9 @@ func getLocalSubnets() []string {
 			if ip == nil {
 				continue
 			}
+			if ip[0] == 169 && ip[1] == 254 {
+				continue
+			}
 			ones, bits := ipNet.Mask.Size()
 			if ones == 0 || bits == 0 || ones > 24 {
 				continue
@@ -197,6 +233,9 @@ func getLocalSubnets() []string {
 			subnet := fmt.Sprintf("%d.%d.%d", ip[0], ip[1], ip[2])
 			subnets = append(subnets, subnet)
 		}
+	}
+	if len(subnets) == 0 {
+		log.Println("[discovery] getLocalSubnets: no valid IPv4 subnets found (check network adapters)")
 	}
 	return subnets
 }
@@ -291,7 +330,7 @@ func discoverHueViaSsdp(ctx context.Context, addBridge func(ip, name string)) {
 		}
 	}
 
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(3 * time.Second)
 	if ctxDeadline, ok := ctx.Deadline(); ok && ctxDeadline.Before(deadline) {
 		deadline = ctxDeadline.Add(-500 * time.Millisecond)
 	}

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import {
+  Loader2,
   Wifi,
   Settings2,
 } from "lucide-react";
@@ -15,7 +16,7 @@ import { DEFAULT_KELVIN } from "@/lib/types";
 import { resolveMode } from "@/lib/utils";
 
 export function Lights() {
-  const { devices, deviceOn, brightness, kelvin, color } = useLightStore();
+  const { loading, devices, deviceOn, brightness, kelvin, color } = useLightStore();
 
   const [modeOverrides, setModeOverrides] = useState<Record<string, LightMode>>({});
   const [openRoomDeviceId, setOpenRoomDeviceId] = useState<string | null>(null);
@@ -57,7 +58,17 @@ export function Lights() {
 
   return (
     <div className="space-y-8">
-      {devices.length === 0 && (
+      {devices.length === 0 && loading && (
+        <Card className="flex flex-col items-center justify-center py-16 text-center">
+          <Loader2 className="h-10 w-10 text-muted-foreground/40 mb-4 animate-spin" />
+          <h3 className="text-lg font-semibold">Connecting to your lights…</h3>
+          <p className="text-sm text-muted-foreground mt-2 max-w-md">
+            Establishing connection to your configured devices.
+          </p>
+        </Card>
+      )}
+
+      {devices.length === 0 && !loading && (
         <Card className="flex flex-col items-center justify-center py-16 text-center">
           <Wifi className="h-12 w-12 text-muted-foreground/40 mb-4" />
           <h3 className="text-lg font-semibold">No Lights Found</h3>

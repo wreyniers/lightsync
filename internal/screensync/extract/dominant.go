@@ -60,7 +60,12 @@ func vividDominantColor(img image.Image, whiteBias float64) lights.Color {
 	for c, n := range counts {
 		sorted = append(sorted, cc{c, n})
 	}
-	sort.Slice(sorted, func(i, j int) bool { return sorted[i].count > sorted[j].count })
+	sort.SliceStable(sorted, func(i, j int) bool {
+		if sorted[i].count != sorted[j].count {
+			return sorted[i].count > sorted[j].count
+		}
+		return lessRGB(sorted[i].color, sorted[j].color)
+	})
 
 	const familyThresholdSq = 3600.0
 	type family struct {
@@ -76,7 +81,8 @@ func vividDominantColor(img image.Image, whiteBias float64) lights.Color {
 		for i := range families {
 			if colorDist(item.color, families[i].representative) < familyThresholdSq {
 				families[i].totalCount += item.count
-				if item.count > families[i].bestCount {
+				if item.count > families[i].bestCount ||
+					(item.count == families[i].bestCount && lessRGB(item.color, families[i].bestColor)) {
 					families[i].bestCount = item.count
 					families[i].bestColor = item.color
 				}
@@ -96,7 +102,8 @@ func vividDominantColor(img image.Image, whiteBias float64) lights.Color {
 
 	best := families[0]
 	for _, f := range families[1:] {
-		if f.totalCount > best.totalCount {
+		if f.totalCount > best.totalCount ||
+			(f.totalCount == best.totalCount && lessRGB(f.bestColor, best.bestColor)) {
 			best = f
 		}
 	}
@@ -163,7 +170,12 @@ func dominantColor(img image.Image, whiteBias float64) lights.Color {
 	for c, n := range counts {
 		sorted = append(sorted, cc{c, n})
 	}
-	sort.Slice(sorted, func(i, j int) bool { return sorted[i].count > sorted[j].count })
+	sort.SliceStable(sorted, func(i, j int) bool {
+		if sorted[i].count != sorted[j].count {
+			return sorted[i].count > sorted[j].count
+		}
+		return lessRGB(sorted[i].color, sorted[j].color)
+	})
 
 	// Perceptual family grouping.
 	// Two quantized buckets belong to the same family when their squared RGB
@@ -183,7 +195,8 @@ func dominantColor(img image.Image, whiteBias float64) lights.Color {
 		for i := range families {
 			if colorDist(item.color, families[i].representative) < familyThresholdSq {
 				families[i].totalCount += item.count
-				if item.count > families[i].bestCount {
+				if item.count > families[i].bestCount ||
+					(item.count == families[i].bestCount && lessRGB(item.color, families[i].bestColor)) {
 					families[i].bestCount = item.count
 					families[i].bestColor = item.color
 				}
@@ -204,7 +217,8 @@ func dominantColor(img image.Image, whiteBias float64) lights.Color {
 	// Pick the family with the highest total pixel area.
 	best := families[0]
 	for _, f := range families[1:] {
-		if f.totalCount > best.totalCount {
+		if f.totalCount > best.totalCount ||
+			(f.totalCount == best.totalCount && lessRGB(f.bestColor, best.bestColor)) {
 			best = f
 		}
 	}
@@ -214,4 +228,14 @@ func dominantColor(img image.Image, whiteBias float64) lights.Color {
 	b := float64(best.bestColor[2]) / 255
 	h, s, bv := rgbToHSB(r, g, b)
 	return lights.Color{H: h, S: s, B: bv}
+}
+
+func lessRGB(a, b [3]uint8) bool {
+	if a[0] != b[0] {
+		return a[0] < b[0]
+	}
+	if a[1] != b[1] {
+		return a[1] < b[1]
+	}
+	return a[2] < b[2]
 }

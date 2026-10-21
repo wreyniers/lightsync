@@ -7,12 +7,26 @@ import (
 	"golang.org/x/sys/windows/registry"
 )
 
-// isCameraOn checks the Windows CapabilityAccessManager consent store
+// isCameraOn reports whether any camera device is currently streaming.
+//
+// It prefers the Media Foundation sensor activity monitor, which is what the
+// Windows privacy settings page uses for "Currently in use". The registry
+// consent store is only consulted when that monitor is unavailable: since the
+// October 2026 cumulative update, Windows no longer writes LastUsedTime values
+// there, so it can't be relied on by itself.
+func isCameraOn() bool {
+	if startSensorMonitor() {
+		return sensorCameraOn()
+	}
+	return registryCameraOn()
+}
+
+// registryCameraOn checks the Windows CapabilityAccessManager consent store
 // to determine if any camera device is currently in use.
 //
 // It checks both HKCU and HKLM, and looks under the top-level webcam key
 // (for packaged/UWP apps) as well as the NonPackaged subkey (for desktop apps).
-func isCameraOn() bool {
+func registryCameraOn() bool {
 	paths := []struct {
 		root registry.Key
 		path string

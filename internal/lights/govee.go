@@ -3,6 +3,7 @@ package lights
 import (
 	"context"
 	"fmt"
+	"log"
 	"log/slog"
 	"os"
 	"sync"
@@ -13,6 +14,7 @@ import (
 
 type GoveeController struct {
 	mu         sync.RWMutex
+	logger     *slog.Logger
 	controller *govee.Controller
 	deviceMap  map[string]*govee.Device
 	started    bool
@@ -23,6 +25,7 @@ func NewGoveeController() *GoveeController {
 	ctrl := govee.NewController(logger)
 
 	return &GoveeController{
+		logger:     logger,
 		controller: ctrl,
 		deviceMap:  make(map[string]*govee.Device),
 	}
@@ -45,13 +48,22 @@ func (c *GoveeController) ensureStarted() {
 }
 
 func (c *GoveeController) Discover(ctx context.Context) ([]Device, error) {
+	log.Printf("[govee] Discovering via LAN...")
 	c.ensureStarted()
 
 	time.Sleep(3 * time.Second)
 
 	devices := c.controller.Devices()
-	var result []Device
 
+	if len(devices) == 0 {
+		// No Govee devices on the network — shut down the background goroutines
+		// so the UDP listener and periodic scanner don't run needlessly.
+		_ = c.Close()
+		log.Printf("[govee] Found 0 device(s), stopped controller")
+		return nil, nil
+	}
+
+	var result []Device
 	c.mu.Lock()
 	for _, d := range devices {
 		ip := d.IP()
@@ -71,6 +83,7 @@ func (c *GoveeController) Discover(ctx context.Context) ([]Device, error) {
 	}
 	c.mu.Unlock()
 
+	log.Printf("[govee] Found %d device(s)", len(result))
 	return result, nil
 }
 
@@ -148,9 +161,23 @@ func (c *GoveeController) TurnOff(_ context.Context, deviceID string) error {
 func (c *GoveeController) Close() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.started {
-		c.controller.Shutdown()
-		c.started = false
+	if !c.started {
+		return nil
 	}
+	c.started = false
+
+	done := make(chan struct{})
+	go func() {
+		c.controller.Shutdown()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		slog.Warn("Govee controller shutdown timed out")
+	}
+	// go-vee Controller is not reusable after Start/Shutdown (internal channels are
+	// closed). Periodic discovery may call Discover again, so allocate a fresh controller.
+	c.controller = govee.NewController(c.logger)
 	return nil
 }

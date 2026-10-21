@@ -1,16 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { MonitorPlay, Lightbulb } from "lucide-react";
-import { EventsOn } from "../../../wailsjs/runtime/runtime";
-import { GetScreenSyncState } from "../../../wailsjs/go/main/App";
+import { App } from "@bindings";
+import { Events } from "@wailsio/runtime";
 import type { Color, ScreenSyncStats } from "@/lib/types";
 
 function openLightsPopup() {
-  const base = window.location.href.replace(/#.*$/, "");
-  window.open(
-    `${base}#lights-popup`,
-    "lightsync-lights",
-    "width=420,height=660,resizable=yes,menubar=no,toolbar=no,location=no,status=no"
-  );
+  App.OpenLightsPopup();
 }
 
 /**
@@ -18,11 +13,28 @@ function openLightsPopup() {
  * Subscribes to screensync:state, screensync:stats, and screensync:colors independently
  * so it works from any page without prop-drilling.
  */
+// Perceptual alignment thresholds shared with the other swatch previews.
+const ALIGN_HUE_DEG = 3;
+const ALIGN_SAT = 0.03;
+const ALIGN_BRIGHT = 0.03;
+
+function isAligned(a: Color | undefined, b: Color | undefined): boolean {
+  if (!a || !b) return false;
+  let dh = Math.abs(a.h - b.h);
+  if (dh > 180) dh = 360 - dh;
+  return (
+    dh <= ALIGN_HUE_DEG &&
+    Math.abs(a.s - b.s) <= ALIGN_SAT &&
+    Math.abs(a.b - b.b) <= ALIGN_BRIGHT
+  );
+}
+
 export function ScreenSyncSidebarWidget() {
   const [running, setRunning] = useState(false);
   const [sceneName, setSceneName] = useState("");
   const [stats, setStats] = useState<ScreenSyncStats | null>(null);
-  const [colors, setColors] = useState<Color[]>([]);
+  const [active, setActive] = useState<Color[]>([]);
+  const [target, setTarget] = useState<Color[]>([]);
 
   const flashSceneRef = useRef(false);
   const flashColorRef = useRef(false);
@@ -33,7 +45,7 @@ export function ScreenSyncSidebarWidget() {
 
   // Hydrate on mount.
   useEffect(() => {
-    GetScreenSyncState()
+    App.GetScreenSyncState()
       .then((s) => setRunning(s.running))
       .catch(() => {});
   }, []);
@@ -45,7 +57,8 @@ export function ScreenSyncSidebarWidget() {
       setRunning(data?.running ?? false);
       if (!data?.running) {
         setStats(null);
-        setColors([]);
+        setActive([]);
+        setTarget([]);
         setSceneName("");
       }
     };
@@ -71,18 +84,20 @@ export function ScreenSyncSidebarWidget() {
       }
     };
 
-    const colorsHandler = (incoming: Color[]) => {
-      if (Array.isArray(incoming)) setColors(incoming.slice(0, 8));
+    const take = (setter: (c: Color[]) => void) => (incoming: Color[]) => {
+      if (Array.isArray(incoming)) setter(incoming.slice(0, 8));
     };
 
-    const offState = EventsOn("screensync:state", stateHandler);
-    const offStats = EventsOn("screensync:stats", statsHandler);
-    const offColors = EventsOn("screensync:colors", colorsHandler);
+    const offState = Events.On("screensync:state", (e) => stateHandler(e.data));
+    const offStats = Events.On("screensync:stats", (e) => statsHandler(e.data));
+    const offColors = Events.On("screensync:colors", (e) => take(setActive)(e.data as Color[]));
+    const offTarget = Events.On("screensync:targetColors", (e) => take(setTarget)(e.data as Color[]));
 
     return () => {
       offState?.();
       offStats?.();
       offColors?.();
+      offTarget?.();
     };
   }, []);
 
@@ -95,15 +110,15 @@ export function ScreenSyncSidebarWidget() {
     fpsPercent >= 80 ? "text-success" : fpsPercent >= 50 ? "text-warning" : "text-destructive";
 
   return (
-    <div className="rounded-xl bg-primary/10 overflow-hidden">
+    <div className="rounded-xl bg-muted overflow-hidden">
       {/* Title row — matches camera/scene card style */}
       <div className="flex items-center gap-3 px-4 pt-3 pb-2">
-        <div className="h-8 w-8 shrink-0 rounded-lg bg-primary/20 flex items-center justify-center">
-          <MonitorPlay className="h-4 w-4 text-primary" />
+        <div className="h-8 w-8 shrink-0 rounded-xl bg-background/40 flex items-center justify-center">
+          <MonitorPlay className="h-4 w-4 text-muted-foreground" />
         </div>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-1.5">
-            <p className="text-sm font-semibold text-primary leading-tight">Screen Sync</p>
+            <p className="text-sm font-semibold text-foreground leading-tight">Screen Sync</p>
             <span className="h-1.5 w-1.5 rounded-full bg-success animate-pulse shrink-0" />
           </div>
           <p className="text-xs text-muted-foreground mt-0.5 truncate">
@@ -114,30 +129,57 @@ export function ScreenSyncSidebarWidget() {
           type="button"
           onClick={openLightsPopup}
           title="Open lights panel"
-          className="shrink-0 h-7 w-7 rounded-lg flex items-center justify-center text-muted-foreground hover:text-primary hover:bg-primary/20 transition-colors"
+          className="shrink-0 h-7 w-7 rounded-xl flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-background/40 transition-colors"
         >
           <Lightbulb className="h-3.5 w-3.5" />
         </button>
       </div>
 
-      {/* Divider */}
-      <div className="mx-4 h-px bg-primary/10" />
-
       <div className="px-4 pb-3 pt-2.5 space-y-2.5">
-        {/* Live color circles */}
-        {colors.length > 0 ? (
+        {/* Live split swatches — left half = active colour sent to the bulb;
+            right half = target the handoff ramp is driving toward; white
+            outer ring appears once the two halves are perceptually aligned. */}
+        {active.length > 0 || target.length > 0 ? (
           <div className="flex gap-2 flex-wrap">
-            {colors.map((c, i) => {
-              const bg = `hsl(${c.h}, ${Math.round(c.s * 100)}%, ${Math.round(c.b * 50)}%)`;
-              const pct = Math.round(c.b * 100);
+            {Array.from({ length: Math.max(active.length, target.length) }).map((_, i) => {
+              const a = active[i];
+              const t = target[i];
+              const aligned = isAligned(a, t);
+              const aBg = a
+                ? `hsl(${a.h}, ${Math.round(a.s * 100)}%, ${Math.round(a.b * 50)}%)`
+                : "rgba(255,255,255,0.06)";
+              const tBg = t
+                ? `hsl(${t.h}, ${Math.round(t.s * 100)}%, ${Math.round(t.b * 50)}%)`
+                : "rgba(255,255,255,0.06)";
+              const pct = a ? Math.round(a.b * 100) : t ? Math.round(t.b * 100) : 0;
+
               return (
                 <div
                   key={i}
-                  className="h-8 w-8 rounded-full ring-1 ring-white/20 shadow transition-colors duration-300 shrink-0 relative flex items-center justify-center"
-                  style={{ background: bg }}
-                  title={`H:${Math.round(c.h)}° S:${Math.round(c.s * 100)}% B:${pct}%`}
+                  className={`relative h-8 w-8 rounded-full overflow-hidden shadow shrink-0 transition-shadow ${
+                    aligned ? "ring-2 ring-white/80" : "ring-1 ring-white/20"
+                  }`}
+                  title={
+                    `Slot ${i + 1}\n` +
+                    `  active:  ${a ? `H:${Math.round(a.h)}° S:${Math.round(a.s * 100)}% B:${Math.round(a.b * 100)}%` : "—"}\n` +
+                    `  target:  ${t ? `H:${Math.round(t.h)}° S:${Math.round(t.s * 100)}% B:${Math.round(t.b * 100)}%` : "—"}` +
+                    (aligned ? "\n  ✓ aligned" : "")
+                  }
                 >
-                  <span className="text-[10px] font-medium text-white drop-shadow-sm">{pct}%</span>
+                  <div
+                    className="absolute inset-y-0 left-0 w-1/2 transition-colors duration-300"
+                    style={{ background: aBg }}
+                  />
+                  <div
+                    className="absolute inset-y-0 right-0 w-1/2 transition-colors duration-300"
+                    style={{ background: tBg }}
+                  />
+                  {!aligned && (a || t) && (
+                    <span className="absolute inset-y-0 left-1/2 -translate-x-1/2 w-px bg-white/20 pointer-events-none" />
+                  )}
+                  <span className="absolute inset-0 flex items-center justify-center text-[10px] font-medium text-white drop-shadow-sm pointer-events-none">
+                    {pct}%
+                  </span>
                 </div>
               );
             })}

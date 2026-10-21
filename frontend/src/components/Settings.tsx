@@ -1,23 +1,16 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { Info, Plus, Search, Loader2, Wifi, Rss, CheckCircle2, X, Lightbulb, Trash2 } from "lucide-react";
+import { Info, Plus, Search, Loader2, Wifi, Rss, CheckCircle2, X, Lightbulb, Trash2, FileJson } from "lucide-react";
 import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { Toggle } from "@/components/ui/Toggle";
 import { Slider } from "@/components/ui/Slider";
 import type { Settings as SettingsType, Device } from "@/lib/types";
 import { APP_VERSION } from "@/lib/types";
-import { store } from "../../wailsjs/go/models";
-import {
-  GetSettings,
-  UpdateSettings,
-  GetHueBridges,
-  DiscoverHueBridges,
-  PairHueBridge,
-  RemoveHueBridge,
-} from "../../wailsjs/go/main/App";
+import { App } from "@bindings";
+import { Settings as SettingsModel } from "@bindings/internal/store/models.js";
 import { lightActions } from "@/hooks/useLightStore";
 import { getBrandInfo } from "@/lib/brands";
-import { EventsOn } from "../../wailsjs/runtime/runtime";
+import { Events } from "@wailsio/runtime";
 
 interface ScanProgress {
   phase: string;
@@ -38,13 +31,64 @@ interface DiscoveredBridge {
 
 type AddBridgeStep = "idle" | "scanning" | "results" | "pairing" | "paired";
 
+function AddElgatoByIPFallback({ onAdded }: { onAdded?: () => void }) {
+  const [ip, setIp] = useState("");
+  const [adding, setAdding] = useState(false);
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState(false);
+  const handleAdd = async () => {
+    const trimmed = ip.trim();
+    if (!trimmed) return;
+    setAdding(true);
+    setError("");
+    setSuccess(false);
+    try {
+      const device = await App.AddElgatoByIP(trimmed);
+      setSuccess(true);
+      setIp("");
+      lightActions.refreshDevices();
+      onAdded?.();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setAdding(false);
+    }
+  };
+  return (
+    <div className="rounded-lg border border-dashed border-border/60 p-3 space-y-2">
+      <p className="text-xs text-muted-foreground font-medium">
+        Discovery failed? Add Elgato Key Light by IP
+      </p>
+      <div className="flex gap-2">
+        <input
+          type="text"
+          placeholder="192.168.4.73"
+          value={ip}
+          onChange={(e) => setIp(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && handleAdd()}
+          className="flex-1 px-3 py-1.5 rounded-md bg-background border border-input text-sm font-mono"
+        />
+        <Button onClick={handleAdd} disabled={adding || !ip.trim()} size="sm">
+          {adding ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Add"}
+        </Button>
+      </div>
+      {error && <p className="text-xs text-destructive">{error}</p>}
+      {success && <p className="text-xs text-success">Added successfully. Check the Lights tab.</p>}
+    </div>
+  );
+}
+
 export function Settings() {
   const [settings, setSettings] = useState<SettingsType>({
     pollIntervalMs: 1000,
     startMinimized: false,
     launchAtLogin: false,
+    lightRefreshFirstDelayMinutes: 10,
+    lightRefreshIntervalMinutes: 15,
+    lightRefreshTimeoutSeconds: 45,
   });
   const [bridges, setBridges] = useState<HueBridgeInfo[]>([]);
+  const [webcamMonitoring, setWebcamMonitoring] = useState(true);
   const isInitialLoad = useRef(true);
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -55,6 +99,15 @@ export function Settings() {
   const [scanPhase, setScanPhase] = useState("");
   const [foundDevices, setFoundDevices] = useState<Device[]>([]);
   const scanCleanupRef = useRef<(() => void) | null>(null);
+
+  useEffect(() => {
+    App.IsMonitoringEnabled().then(setWebcamMonitoring).catch(() => {});
+  }, []);
+
+  const handleToggleWebcamMonitoring = (enabled: boolean) => {
+    App.SetMonitoringEnabled(enabled);
+    setWebcamMonitoring(enabled);
+  };
 
   const dismissScan = useCallback(() => {
     setShowScanCard(false);
@@ -70,7 +123,8 @@ export function Settings() {
     setScanPhase("");
     setFoundDevices([]);
 
-    scanCleanupRef.current = EventsOn("scan:progress", (progress: ScanProgress) => {
+    scanCleanupRef.current = Events.On("scan:progress", (e) => {
+      const progress = e.data as ScanProgress;
       setScanMessage(progress.message);
       setScanPhase(progress.phase);
       if (progress.devices && progress.devices.length > 0) {
@@ -104,8 +158,8 @@ export function Settings() {
   const pairIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
-    GetSettings().then(setSettings).catch(() => {});
-    GetHueBridges()
+    App.GetSettings().then(setSettings).catch(() => {});
+    App.GetHueBridges()
       .then((b) => setBridges(b || []))
       .catch(() => {});
   }, []);
@@ -123,7 +177,7 @@ export function Settings() {
     }
     if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
     saveTimeoutRef.current = setTimeout(() => {
-      UpdateSettings(new store.Settings(settings)).catch((e) =>
+      App.UpdateSettings(new SettingsModel(settings)).catch((e) =>
         console.error("Failed to save settings:", e),
       );
     }, 300);
@@ -137,7 +191,7 @@ export function Settings() {
     setDiscovered([]);
     setPairError("");
     try {
-      const found = await DiscoverHueBridges();
+      const found = await App.DiscoverHueBridges();
       setDiscovered(found || []);
       setStep("results");
     } catch (e) {
@@ -163,11 +217,11 @@ export function Settings() {
 
       pairIntervalRef.current = setInterval(async () => {
         try {
-          const result = await PairHueBridge(ip);
+          const result = await App.PairHueBridge(ip);
           if (result.success) {
             stopPairing();
             setStep("paired");
-            const updated = await GetHueBridges();
+            const updated = await App.GetHueBridges();
             setBridges(updated || []);
             setTimeout(() => setStep("idle"), 2000);
           } else if (
@@ -201,7 +255,7 @@ export function Settings() {
 
   const handleRemoveBridge = useCallback(async (id: string) => {
     try {
-      await RemoveHueBridge(id);
+      await App.RemoveHueBridge(id);
       setBridges((prev) => prev.filter((b) => b.id !== id));
     } catch (e) {
       console.error("Failed to remove bridge:", e);
@@ -218,73 +272,77 @@ export function Settings() {
       </div>
 
       <Card className="space-y-6">
-        <h3 className="text-lg font-semibold">Monitoring</h3>
+        <h3 className="text-lg font-semibold">Discover Lights</h3>
 
-        <div>
-          <label className="text-sm font-medium mb-1 block">
-            Webcam Poll Interval: {settings.pollIntervalMs}ms
-          </label>
-          <p className="text-xs text-muted-foreground mb-3">
-            How often LightSync checks if your camera is active. Lower values
-            are more responsive but use slightly more CPU.
+        <div className="flex items-center justify-between">
+          <p className="text-sm text-muted-foreground">
+            Scan your local network to find LIFX, Hue, Elgato, and Govee lights.
           </p>
-          <Slider
-            value={settings.pollIntervalMs}
-            min={250}
-            max={5000}
-            step={250}
-            onChange={(v) =>
-              setSettings((s) => ({ ...s, pollIntervalMs: v }))
-            }
-          />
-          <div className="flex justify-between text-xs text-muted-foreground mt-1">
-            <span>250ms (fast)</span>
-            <span>5000ms (slow)</span>
+          <Button onClick={handleLightScan} disabled={scanning}>
+            {scanning ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Rss className="h-4 w-4" />
+            )}
+            {scanning ? "Scanning…" : "Scan Network"}
+          </Button>
+        </div>
+
+        <AddElgatoByIPFallback />
+
+        {showScanCard && (
+          <div className="rounded-lg bg-background/50 border border-border p-4 space-y-3">
+            <div className="flex items-center gap-3">
+              {scanPhase === "done" ? (
+                <CheckCircle2 className="h-5 w-5 text-green-500 shrink-0" />
+              ) : (
+                <Loader2 className="h-5 w-5 animate-spin text-primary shrink-0" />
+              )}
+              <p className="text-sm font-medium flex-1">{scanMessage}</p>
+              {!scanning && (
+                <button
+                  type="button"
+                  onClick={dismissScan}
+                  className="text-muted-foreground hover:text-foreground transition-colors"
+                  aria-label="Dismiss"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              )}
+            </div>
+            {foundDevices.length > 0 && (
+              <div className="space-y-1.5 pt-1">
+                <p className="text-xs text-muted-foreground font-medium">
+                  Discovered lights
+                </p>
+                {foundDevices.map((d) => {
+                  const info = getBrandInfo(d.brand);
+                  return (
+                    <div
+                      key={d.id}
+                      className="flex items-center gap-2 text-sm animate-in fade-in slide-in-from-left-2 duration-300"
+                    >
+                      <Lightbulb className={`h-3.5 w-3.5 shrink-0 ${info.color}`} />
+                      <span>{d.name}</span>
+                      <span className="text-xs text-muted-foreground">{info.label}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
-        </div>
+        )}
 
-        <div className="flex items-center justify-between">
-          <div>
-            <p className="text-sm font-medium">Start Minimized</p>
-            <p className="text-xs text-muted-foreground">
-              Start LightSync minimized to system tray
-            </p>
+        <div className="pt-2">
+          <div className="flex items-center justify-between mb-3">
+            <h4 className="text-base font-semibold">Hue Bridges</h4>
+            {step === "idle" && (
+              <Button variant="outline" size="sm" onClick={handleScan}>
+                <Plus className="h-4 w-4" />
+                Add Bridge
+              </Button>
+            )}
           </div>
-          <Toggle
-            checked={settings.startMinimized}
-            onChange={(v) =>
-              setSettings((s) => ({ ...s, startMinimized: v }))
-            }
-          />
-        </div>
-
-        <div className="flex items-center justify-between">
-          <div>
-            <p className="text-sm font-medium">Launch at Login</p>
-            <p className="text-xs text-muted-foreground">
-              Automatically start LightSync when you log in
-            </p>
-          </div>
-          <Toggle
-            checked={settings.launchAtLogin}
-            onChange={(v) =>
-              setSettings((s) => ({ ...s, launchAtLogin: v }))
-            }
-          />
-        </div>
-
-      </Card>
-
-      <Card className="space-y-6">
-        <div className="flex items-center justify-between">
-          <h3 className="text-lg font-semibold">Hue Bridges</h3>
-          {step === "idle" && (
-            <Button variant="outline" size="sm" onClick={handleScan}>
-              <Plus className="h-4 w-4" />
-              Add Bridge
-            </Button>
-          )}
-        </div>
 
         {step === "scanning" && (
           <div className="rounded-lg p-6 flex flex-col items-center gap-3">
@@ -405,66 +463,157 @@ export function Settings() {
             </button>
           </div>
         ))}
+        </div>
       </Card>
 
-      <Card className="space-y-4">
-        <div className="flex items-center justify-between">
-          <h3 className="text-lg font-semibold">Discover Lights</h3>
-          <Button onClick={handleLightScan} disabled={scanning}>
-            {scanning ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <Rss className="h-4 w-4" />
-            )}
-            {scanning ? "Scanning…" : "Scan Network"}
-          </Button>
-        </div>
-        <p className="text-sm text-muted-foreground">
-          Scan your local network to find LIFX, Hue, Elgato, and Govee lights.
-        </p>
+      <Card className="space-y-6">
+        <h3 className="text-lg font-semibold">Monitoring</h3>
 
-        {showScanCard && (
-          <div className="rounded-lg bg-background/50 border border-border p-4 space-y-3">
-            <div className="flex items-center gap-3">
-              {scanPhase === "done" ? (
-                <CheckCircle2 className="h-5 w-5 text-green-500 shrink-0" />
-              ) : (
-                <Loader2 className="h-5 w-5 animate-spin text-primary shrink-0" />
-              )}
-              <p className="text-sm font-medium flex-1">{scanMessage}</p>
-              {!scanning && (
-                <button
-                  type="button"
-                  onClick={dismissScan}
-                  className="text-muted-foreground hover:text-foreground transition-colors"
-                  aria-label="Dismiss"
-                >
-                  <X className="h-4 w-4" />
-                </button>
-              )}
-            </div>
-            {foundDevices.length > 0 && (
-              <div className="space-y-1.5 pt-1">
-                <p className="text-xs text-muted-foreground font-medium">
-                  Discovered lights
-                </p>
-                {foundDevices.map((d) => {
-                  const info = getBrandInfo(d.brand);
-                  return (
-                    <div
-                      key={d.id}
-                      className="flex items-center gap-2 text-sm animate-in fade-in slide-in-from-left-2 duration-300"
-                    >
-                      <Lightbulb className={`h-3.5 w-3.5 shrink-0 ${info.color}`} />
-                      <span>{d.name}</span>
-                      <span className="text-xs text-muted-foreground">{info.label}</span>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-sm font-medium">Webcam Monitoring</p>
+            <p className="text-xs text-muted-foreground">
+              Monitor when your camera turns on or off to trigger scenes
+            </p>
           </div>
-        )}
+          <Toggle
+            checked={webcamMonitoring}
+            onChange={handleToggleWebcamMonitoring}
+          />
+        </div>
+
+        <div>
+          <label className="text-sm font-medium mb-1 block">
+            Webcam Poll Interval: {settings.pollIntervalMs}ms
+          </label>
+          <p className="text-xs text-muted-foreground mb-3">
+            How often LightSync checks if your camera is active. Lower values
+            are more responsive but use slightly more CPU.
+          </p>
+          <Slider
+            value={settings.pollIntervalMs}
+            min={250}
+            max={5000}
+            step={250}
+            onChange={(v) =>
+              setSettings((s) => ({ ...s, pollIntervalMs: v }))
+            }
+          />
+          <div className="flex justify-between text-xs text-muted-foreground mt-1">
+            <span>250ms (fast)</span>
+            <span>5000ms (slow)</span>
+          </div>
+        </div>
+
+        <div className="border-t border-border pt-5 space-y-5">
+          <div>
+            <p className="text-sm font-medium mb-1">Background light refresh</p>
+            <p className="text-xs text-muted-foreground mb-4">
+              Periodically re-discovers lights on your network (same as the light
+              query step of &quot;Scan for lights&quot;) so controller connections stay
+              fresh. Lower intervals use more network activity.
+            </p>
+          </div>
+
+          <div>
+            <label className="text-sm font-medium mb-1 block">
+              First run after startup: {settings.lightRefreshFirstDelayMinutes}{" "}
+              min
+            </label>
+            <p className="text-xs text-muted-foreground mb-3">
+              Wait this long after launch before the first automatic refresh.
+            </p>
+            <Slider
+              value={settings.lightRefreshFirstDelayMinutes}
+              min={1}
+              max={180}
+              step={1}
+              onChange={(v) =>
+                setSettings((s) => ({ ...s, lightRefreshFirstDelayMinutes: v }))
+              }
+            />
+            <div className="flex justify-between text-xs text-muted-foreground mt-1">
+              <span>1 min</span>
+              <span>180 min</span>
+            </div>
+          </div>
+
+          <div>
+            <label className="text-sm font-medium mb-1 block">
+              Repeat every: {settings.lightRefreshIntervalMinutes} min
+            </label>
+            <p className="text-xs text-muted-foreground mb-3">
+              How often to run another refresh while the app stays open.
+            </p>
+            <Slider
+              value={settings.lightRefreshIntervalMinutes}
+              min={1}
+              max={180}
+              step={1}
+              onChange={(v) =>
+                setSettings((s) => ({ ...s, lightRefreshIntervalMinutes: v }))
+              }
+            />
+            <div className="flex justify-between text-xs text-muted-foreground mt-1">
+              <span>1 min</span>
+              <span>180 min</span>
+            </div>
+          </div>
+
+          <div>
+            <label className="text-sm font-medium mb-1 block">
+              Discovery timeout: {settings.lightRefreshTimeoutSeconds}s
+            </label>
+            <p className="text-xs text-muted-foreground mb-3">
+              Maximum time allowed for each refresh attempt. Increase if discovery
+              often fails on slow networks.
+            </p>
+            <Slider
+              value={settings.lightRefreshTimeoutSeconds}
+              min={10}
+              max={300}
+              step={5}
+              onChange={(v) =>
+                setSettings((s) => ({ ...s, lightRefreshTimeoutSeconds: v }))
+              }
+            />
+            <div className="flex justify-between text-xs text-muted-foreground mt-1">
+              <span>10s</span>
+              <span>300s</span>
+            </div>
+          </div>
+        </div>
+
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-sm font-medium">Start Minimized</p>
+            <p className="text-xs text-muted-foreground">
+              Start LightSync minimized to system tray
+            </p>
+          </div>
+          <Toggle
+            checked={settings.startMinimized}
+            onChange={(v) =>
+              setSettings((s) => ({ ...s, startMinimized: v }))
+            }
+          />
+        </div>
+
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-sm font-medium">Launch at Login</p>
+            <p className="text-xs text-muted-foreground">
+              Automatically start LightSync when you log in
+            </p>
+          </div>
+          <Toggle
+            checked={settings.launchAtLogin}
+            onChange={(v) =>
+              setSettings((s) => ({ ...s, launchAtLogin: v }))
+            }
+          />
+        </div>
+
       </Card>
 
       <Card>
@@ -485,6 +634,15 @@ export function Settings() {
             Built with Wails, Go, React, and TypeScript.
           </p>
         </div>
+        <Button
+          variant="outline"
+          size="sm"
+          className="mt-4"
+          onClick={() => App.OpenConfigFile().catch((e: unknown) => console.error("Failed to open config:", e))}
+        >
+          <FileJson className="h-3.5 w-3.5" />
+          Open config.json
+        </Button>
       </Card>
     </div>
   );

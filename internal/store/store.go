@@ -25,9 +25,16 @@ type Scene struct {
 }
 
 type Settings struct {
-	PollIntervalMs int  `json:"pollIntervalMs"`
+	PollIntervalMs int `json:"pollIntervalMs"`
 	StartMinimized bool `json:"startMinimized"`
 	LaunchAtLogin  bool `json:"launchAtLogin"`
+	// LightRefreshFirstDelayMinutes is how long after startup before the first
+	// background light re-discovery runs.
+	LightRefreshFirstDelayMinutes int `json:"lightRefreshFirstDelayMinutes"`
+	// LightRefreshIntervalMinutes is how often subsequent re-discoveries run.
+	LightRefreshIntervalMinutes int `json:"lightRefreshIntervalMinutes"`
+	// LightRefreshTimeoutSeconds is the per-attempt network timeout for that discovery.
+	LightRefreshTimeoutSeconds int `json:"lightRefreshTimeoutSeconds"`
 }
 
 type Config struct {
@@ -37,6 +44,10 @@ type Config struct {
 
 	HueBridges  []HueBridge `json:"hueBridges,omitempty"`
 	LastSceneID string      `json:"lastSceneId,omitempty"`
+	// ScreenSyncPortableDefaults is optional global Screen Sync tuning (same
+	// fields calibration can optimize). Merged at runtime — see
+	// EffectiveScreenSyncConfig.
+	ScreenSyncPortableDefaults *ScreenSyncPortableDefaults `json:"screenSyncPortableDefaults,omitempty"`
 }
 
 type HueBridge struct {
@@ -61,7 +72,10 @@ func New() (*Store, error) {
 		filePath: p,
 		config: Config{
 			Settings: Settings{
-				PollIntervalMs: 1000,
+				PollIntervalMs:                DefaultPollIntervalMs,
+				LightRefreshFirstDelayMinutes: DefaultLightRefreshFirstDelayMinutes,
+				LightRefreshIntervalMinutes:   DefaultLightRefreshIntervalMinutes,
+				LightRefreshTimeoutSeconds:    DefaultLightRefreshTimeoutSeconds,
 			},
 		},
 	}
@@ -102,10 +116,13 @@ func (s *Store) SetScenes(scenes []Scene) error {
 func (s *Store) GetSettings() Settings {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.config.Settings
+	st := s.config.Settings
+	NormalizeSettings(&st)
+	return st
 }
 
 func (s *Store) SetSettings(settings Settings) error {
+	NormalizeSettings(&settings)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.config.Settings = settings
@@ -131,10 +148,53 @@ func (s *Store) GetLastSceneID() string {
 	return s.config.LastSceneID
 }
 
+// ConfigPath returns the path to the config file.
+func (s *Store) ConfigPath() string {
+	return s.filePath
+}
+
 func (s *Store) SetLastSceneID(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.config.LastSceneID = id
+	return s.saveLocked()
+}
+
+// GetScreenSyncPortableDefaults returns a deep copy of saved global tuning, or nil.
+func (s *Store) GetScreenSyncPortableDefaults() *ScreenSyncPortableDefaults {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.config.ScreenSyncPortableDefaults == nil {
+		return nil
+	}
+	b, err := json.Marshal(s.config.ScreenSyncPortableDefaults)
+	if err != nil {
+		return nil
+	}
+	var out ScreenSyncPortableDefaults
+	if err := json.Unmarshal(b, &out); err != nil {
+		return nil
+	}
+	return &out
+}
+
+// SetScreenSyncPortableDefaults persists global portable tuning (nil clears).
+func (s *Store) SetScreenSyncPortableDefaults(p *ScreenSyncPortableDefaults) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if p == nil {
+		s.config.ScreenSyncPortableDefaults = nil
+		return s.saveLocked()
+	}
+	b, err := json.Marshal(p)
+	if err != nil {
+		return err
+	}
+	var copy ScreenSyncPortableDefaults
+	if err := json.Unmarshal(b, &copy); err != nil {
+		return err
+	}
+	s.config.ScreenSyncPortableDefaults = &copy
 	return s.saveLocked()
 }
 
@@ -170,7 +230,11 @@ func (s *Store) load() error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return json.Unmarshal(data, &s.config)
+	if err := json.Unmarshal(data, &s.config); err != nil {
+		return err
+	}
+	NormalizeSettings(&s.config.Settings)
+	return nil
 }
 
 // saveLocked marshals config and writes atomically. Caller must hold s.mu.

@@ -35,7 +35,12 @@ export interface Color {
 export type LightMode = "color" | "kelvin";
 
 export const DEFAULT_KELVIN = 4000;
-export const APP_VERSION = "1.0.0";
+
+/** Injected from build/config.yml via Vite (see ../scripts/app-version.mjs). */
+export const APP_VERSION = __APP_VERSION__;
+
+/** Scene trigger value for Screen Sync (matches Go `internal/store/store.go`). */
+export const SCREEN_SYNC_TRIGGER = "screen_sync";
 
 export interface Scene {
   id: string;
@@ -54,6 +59,12 @@ export interface Settings {
   pollIntervalMs: number;
   startMinimized: boolean;
   launchAtLogin: boolean;
+  /** Minutes after startup before the first background light re-discovery. */
+  lightRefreshFirstDelayMinutes: number;
+  /** Minutes between subsequent background light re-discoveries. */
+  lightRefreshIntervalMinutes: number;
+  /** Max time (seconds) allowed for each periodic discovery attempt. */
+  lightRefreshTimeoutSeconds: number;
 }
 
 // ---- Screen Sync types ----

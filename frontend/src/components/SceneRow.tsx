@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
 import { sceneSwatchBackground } from "@/lib/sceneColors";
 import type { Device, Scene, DeviceState, ScreenSyncConfig } from "@/lib/types";
+import { SCREEN_SYNC_TRIGGER } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 interface SceneRowProps {
@@ -120,7 +121,7 @@ function RegularSceneDetails({ scene, devices }: { scene: Scene; devices: Device
       {hasGlobal && (
         <div>
           <SectionHeader icon={Palette} label="Global Override" />
-          <div className="mt-1.5 divide-y divide-border/30">
+          <div className="mt-1.5 space-y-1">
             {scene.globalColor && (
               <div className="flex items-center justify-between gap-2 text-xs py-0.5">
                 <span className="text-muted-foreground">Color</span>
@@ -172,7 +173,7 @@ function ScreenSyncDetails({ cfg, devices }: { cfg: ScreenSyncConfig; devices: D
       {/* ── Capture ── */}
       <div>
         <SectionHeader icon={CaptureIcon} label="Capture" />
-        <div className="mt-1.5 divide-y divide-border/30">
+        <div className="mt-1.5 space-y-1">
           <Row label="Mode" value={fmt(cfg.captureMode)} />
           {isMonitor && <Row label="Monitor" value={`#${cfg.monitorIndex}`} />}
           {isRegion && (
@@ -204,7 +205,7 @@ function ScreenSyncDetails({ cfg, devices }: { cfg: ScreenSyncConfig; devices: D
       {/* ── Color Extraction ── */}
       <div>
         <SectionHeader icon={Palette} label="Color Extraction" />
-        <div className="mt-1.5 divide-y divide-border/30">
+        <div className="mt-1.5 space-y-1">
           <Row label="Mode" value={isMulti ? "Multi-color" : "Single color"} />
           <Row label="Method" value={fmt(cfg.extractionMethod)} />
           {isMulti && <Row label="Approach" value={fmt(cfg.multiColorApproach)} />}
@@ -218,7 +219,7 @@ function ScreenSyncDetails({ cfg, devices }: { cfg: ScreenSyncConfig; devices: D
       {/* ── Brightness ── */}
       <div>
         <SectionHeader icon={SlidersHorizontal} label="Brightness" />
-        <div className="mt-1.5 divide-y divide-border/30">
+        <div className="mt-1.5 space-y-1">
           <Row label="Mode" value={fmt(cfg.brightnessMode)} />
           <Row label="Multiplier" value={`×${cfg.brightnessMultiplier.toFixed(2)}`} />
           <Row label="Floor" value={pct(cfg.brightnessFloor)} />
@@ -231,7 +232,7 @@ function ScreenSyncDetails({ cfg, devices }: { cfg: ScreenSyncConfig; devices: D
       {/* ── Color Assignment ── */}
       <div>
         <SectionHeader icon={LayoutGrid} label="Color Assignment" />
-        <div className="mt-1.5 divide-y divide-border/30">
+        <div className="mt-1.5 space-y-1">
           <Row label="Strategy" value={fmt(cfg.assignmentStrategy)} />
           {isIdentityLock && <Row label="Breach threshold" value={pct(cfg.identityLockBreachThreshold)} />}
           {isFlowTrack && <Row label="EMA alpha" value={cfg.flowTrackEmaAlpha.toFixed(2)} />}
@@ -243,7 +244,7 @@ function ScreenSyncDetails({ cfg, devices }: { cfg: ScreenSyncConfig; devices: D
       {/* ── Smoothing & Scene Cut ── */}
       <div>
         <SectionHeader icon={Scissors} label="Smoothing & Scene Cut" />
-        <div className="mt-1.5 divide-y divide-border/30">
+        <div className="mt-1.5 space-y-1">
           <Row label="Color smoothing" value={cfg.colorSmoothing.toFixed(2)} />
           <Row label="Assignment handoff" value={`${cfg.assignmentHandoffMs} ms`} />
           <Row label="Scene cut" value={fmt(cfg.sceneCutMode)} />
@@ -269,13 +270,13 @@ export function SceneRow({
   onClone,
 }: SceneRowProps) {
   const [expanded, setExpanded] = useState(false);
-  const isScreenSync = scene.trigger === "screen_sync";
+  const isScreenSync = scene.trigger === SCREEN_SYNC_TRIGGER;
   const swatchBg = isScreenSync ? undefined : sceneSwatchBackground(scene);
 
   const triggerLabel =
     scene.trigger === "camera_on" ? "Camera On"
     : scene.trigger === "camera_off" ? "Camera Off"
-    : scene.trigger === "screen_sync" ? "Screen Sync"
+    : scene.trigger === SCREEN_SYNC_TRIGGER ? "Screen Sync"
     : "Manual";
 
   const deviceCount = isScreenSync
@@ -291,8 +292,8 @@ export function SceneRow({
         <div className="flex items-center gap-3 min-w-0">
           <div
             className={cn(
-              "h-10 w-10 shrink-0 rounded-full ring-1 ring-border flex items-center justify-center",
-              !swatchBg && "bg-primary/10"
+              "h-10 w-10 shrink-0 rounded-full flex items-center justify-center",
+              !swatchBg && "bg-muted"
             )}
             style={swatchBg ? { background: swatchBg } : undefined}
           >
@@ -350,7 +351,7 @@ export function SceneRow({
 
       {/* ── Accordion ── */}
       {expanded && (
-        <div className="border-t border-border px-4 py-4 bg-secondary/20">
+        <div className="px-4 py-4 bg-card">
           {/* Trigger badge */}
           <div className="flex items-center gap-2 mb-3">
             <span className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/60">

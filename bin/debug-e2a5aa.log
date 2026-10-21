@@ -1,0 +1,15 @@
+{"data":{"quitConfirmed":false},"location":"main.go:hook","message":"WindowClosing hook fired","sessionId":"e2a5aa","timestamp":1772438318678}
+{"data":null,"location":"main.go:hook","message":"emitted window:close-requested, cancelling close","sessionId":"e2a5aa","timestamp":1772438318679}
+{"data":null,"location":"app.go:QuitApp","message":"QuitApp called","sessionId":"e2a5aa","timestamp":1772438319403}
+{"data":null,"location":"app.go:QuitApp","message":"calling application.Get().Quit()","sessionId":"e2a5aa","timestamp":1772438319404}
+{"data":null,"location":"app.go:QuitApp","message":"force-exit goroutine started, waiting 6s","sessionId":"e2a5aa","timestamp":1772438319404}
+{"data":null,"location":"app.go:ServiceShutdown","message":"ServiceShutdown called","sessionId":"e2a5aa","timestamp":1772438319404}
+{"data":null,"location":"app.go:shutdown","message":"shutdown() started","sessionId":"e2a5aa","timestamp":1772438319404}
+{"data":null,"location":"app.go:shutdown","message":"stopping screenSyncEngine","sessionId":"e2a5aa","timestamp":1772438319404}
+{"data":null,"location":"app.go:shutdown","message":"screenSyncEngine stopped","sessionId":"e2a5aa","timestamp":1772438319404}
+{"data":null,"location":"app.go:shutdown","message":"closing lightManager","sessionId":"e2a5aa","timestamp":1772438319704}
+{"data":null,"location":"app.go:shutdown","message":"lightManager closed","sessionId":"e2a5aa","timestamp":1772438319704}
+{"data":null,"location":"app.go:shutdown","message":"shutdown() completed","sessionId":"e2a5aa","timestamp":1772438319705}
+{"data":null,"location":"app.go:ServiceShutdown","message":"shutdown() completed normally","sessionId":"e2a5aa","timestamp":1772438319705}
+{"data":null,"location":"app.go:ServiceShutdown","message":"ServiceShutdown returning","sessionId":"e2a5aa","timestamp":1772438319705}
+{"data":null,"location":"app.go:QuitApp","message":"force-exit timer expired, calling os.Exit(0)","sessionId":"e2a5aa","timestamp":1772438325404}

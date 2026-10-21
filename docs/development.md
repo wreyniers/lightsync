@@ -19,6 +19,8 @@ This guide covers everything needed to set up a local development environment, u
 - [Adding a New Wails Method](#adding-a-new-wails-method)
 - [Modifying the Store / Data Model](#modifying-the-store--data-model)
 - [Building](#building)
+- [Colour-Extraction Self-Test](#colour-extraction-self-test)
+  - [Self-test calibration (screen sync)](#self-test-calibration-screen-sync)
 - [Troubleshooting](#troubleshooting)
 
 ---
@@ -253,6 +255,116 @@ wails build
 ```
 
 Output: `build/bin/LightSync.app`
+
+---
+
+## Colour-Extraction Self-Test
+
+The screen-sync pipeline has three complementary layers of regression
+protection. Knowing which layer to reach for saves a lot of debugging time
+when a colour looks wrong on the bulb.
+
+| Layer | Where it lives | What it catches |
+|---|---|---|
+| **Unit/integration tests** | `internal/screensync/extract/pipeline_test.go` | Synthetic fixtures (solids, quadrant) with tight tolerances + real photos with loose tolerances. Runs under normal `go test ./...`. Catches channel swaps, magenta drift, HSL↔HSB mismatches. |
+| **Probe** | `internal/screensync/extract/probe_test.go` | Not an assertion — prints the HSB triples the production pipeline extracts from every `testdata/` image across every mode. Used to regenerate baselines for the Self-Test harness. Gated on `LIGHTSYNC_PROBE=1`. |
+| **In-app Self-Test** | `internal/screensync/selftest/` + the **Self-Test** tab in the running app | Drives the full real pipeline end-to-end — DXGI capture of a fullscreen fixture popup, the same Extract / Adjust / Smooth / Assign / Handoff chain the engine uses, convergence tracking, and a copy-pasteable diagnostic blob. Catches anything the unit tests miss (DWM compositing, DPI, actual UDP send paths). |
+
+### Regenerating the Self-Test baselines (the probe)
+
+The baselines in `internal/screensync/selftest/fixtures.go` are golden-file
+snapshots of what the extractor produces for each `testdata/` image. They
+need to be refreshed any time the extraction algorithm, saturation boost,
+brightness adjustments, or mode matrix changes — otherwise the in-app
+Self-Test will flag false "drifting" verdicts.
+
+**PowerShell (Windows):**
+
+```powershell
+$env:LIGHTSYNC_PROBE="1"
+go test -run TestProbeTestdata -v ./internal/screensync/extract/...
+$env:LIGHTSYNC_PROBE=""
+```
+
+**bash / zsh (macOS / Linux):**
+
+```bash
+LIGHTSYNC_PROBE=1 go test -run TestProbeTestdata -v ./internal/screensync/extract/...
+```
+
+At the end of the output, the probe emits a block starting with
+`========== PASTE BELOW INTO fixtures.go ==========`. Each fixture's
+`map[string][]lights.Color{…}` block is pre-keyed by fixture ID and mode
+slug; drop each one into the corresponding `expect<Name>()` helper in
+`internal/screensync/selftest/fixtures.go`, replacing the previous literal.
+
+The probe is deliberately skipped under plain `go test ./...` so CI stays
+fast and the baselines never drift silently between manual refreshes.
+
+### Adding or swapping fixtures
+
+1. **Photo fixtures** — drop a `.jpg` or `.png` into both
+   `internal/screensync/extract/testdata/` (for the probe) **and**
+   `frontend/public/testdata/` (for the app to serve to the fixture popup).
+   Most photos should live in both places; only the synthetics diverge
+   because they're generated, not downloaded.
+2. **Synthetic fixtures** — edit `scripts/gen-synth-fixtures.go` and rerun
+   `go run scripts/gen-synth-fixtures.go`. This writes PNGs into
+   `frontend/public/testdata/`; copy the new files over to
+   `internal/screensync/extract/testdata/` as well.
+3. **Register the fixture** in `selftest.BuiltInFixtures()` with an ID slug,
+   label, description, URL, kind, and an `expect<Name>()` helper.
+4. **Run the probe** (section above) and paste the emitted literal into
+   your new helper.
+5. **Add a `fixtureIDFromName` case** in `probe_test.go` so future probe
+   runs key the paste-block to your fixture ID.
+
+### Running the in-app Self-Test
+
+1. Launch the production build (`wails3 task windows:build:production`,
+   then `bin\lightsync.exe`) so the DXGI capture path matches what real
+   users run.
+2. Click the **Self-Test** tab (flask icon) in the left nav.
+3. Pick a fixture — a fullscreen popup appears with just that image and an
+   "ESC to stop" hint. Capture runs at 2 Hz through the full engine-
+   equivalent pipeline.
+4. Watch the results grid. Every row shows a three-stripe swatch per slot:
+   **expected / target / active**. Active slides into target during the
+   handoff ramp; the ring goes green and `locked · Xs` appears once active
+   matches expected for two consecutive frames.
+5. If any cell doesn't lock within 10 s, the header grows a **Copy
+   Diagnostics** button. Clicking it dumps a markdown + JSON blob onto the
+   clipboard with the exact HSB triples, per-slot deltas, and a one-word
+   verdict per cell (`locked`, `wrong-hue`, `hue-drift`, `sat-drift`,
+   `brightness-drift`, `drifting`, `no-baseline`, or `empty-output`).
+
+Paste that blob into any bug report or PR description to communicate
+exactly what the pipeline produced versus what was expected.
+
+### Self-test calibration (screen sync)
+
+After **Run Full Suite** completes, the Self-Test page offers **Screen sync
+calibration** for any scene whose trigger is `screen_sync`.
+
+1. Pick the target scene from the dropdown.
+2. Click **Calibrate**. The app runs a bounded coordinate search over a
+   **subset** of built-in fixtures (fast synthetics-first set), reusing the
+   same live DXGI + pipeline path as the suite. Each evaluation scores the
+   run with a **balanced** cost (accuracy, lock quality, stability) — lower
+   is better. Nothing is written to disk during the search.
+3. When the run finishes, review **baseline vs candidate** metrics and the
+   list of **changed knobs** only.
+4. **Apply to scene** persists the candidate `ScreenSyncConfig` on that scene.
+   **Rollback last apply** restores the config snapshot from immediately before
+   the last successful apply for that same scene (one level).
+5. **Copy report JSON** grabs the full `CalibrationReport` for bug reports or
+   tuning notes.
+
+Regenerate JS bindings after changing exported Go app methods:
+
+```powershell
+wails3 generate bindings
+```
 
 ---
 

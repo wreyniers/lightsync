@@ -1,15 +1,15 @@
 {
 	"fixed": {
-		"file_version": "{{.Info.ProductVersion}}"
+		"file_version": "1.2.0"
 	},
 	"info": {
 		"0000": {
-			"ProductVersion": "{{.Info.ProductVersion}}",
-			"CompanyName": "{{.Info.CompanyName}}",
-			"FileDescription": "{{.Info.ProductName}}",
-			"LegalCopyright": "{{.Info.Copyright}}",
-			"ProductName": "{{.Info.ProductName}}",
-			"Comments": "{{.Info.Comments}}"
+			"ProductVersion": "1.2.0",
+			"CompanyName": "ReyTech",
+			"FileDescription": "LightSync - Smart lighting control",
+			"LegalCopyright": "(c) 2026, ReyTech",
+			"ProductName": "LightSync",
+			"Comments": "LightSync - Smart lighting control"
 		}
 	}
 }

@@ -8,23 +8,30 @@ import (
 	"fmt"
 	"image/png"
 	"io"
+	"log/slog"
+	"os"
+	"os/exec"
+	"runtime"
+	"strings"
+	"sync"
 	"time"
 
-	"github.com/getlantern/systray"
 	"github.com/google/uuid"
-	"github.com/wailsapp/wails/v2/pkg/runtime"
+	"github.com/wailsapp/wails/v3/pkg/application"
 
 	"lightsync/internal/discovery"
 	"lightsync/internal/lights"
 	"lightsync/internal/scenes"
 	"lightsync/internal/screensync"
 	"lightsync/internal/screensync/capture"
+	"lightsync/internal/screensync/selftest"
 	"lightsync/internal/store"
 	"lightsync/internal/webcam"
 )
 
 type App struct {
-	ctx          context.Context
+	mainWindow application.Window
+
 	store        *store.Store
 	lightManager *lights.Manager
 	sceneManager *scenes.Manager
@@ -36,13 +43,40 @@ type App struct {
 	goveeCtrl    *lights.GoveeController
 
 	screenSyncEngine      *screensync.Engine
-	screenSyncActiveScene string // sceneID of the running screen sync scene
-	// preSyncStates holds device states captured just before screen sync started
-	// so they can be restored when screen sync is deactivated.
-	preSyncStates map[string]lights.DeviceState
+	screenSyncActiveScene string
+	preSyncStates        map[string]lights.DeviceState
 
-	// quitConfirmed is set to true when the user explicitly chooses "Exit" in
-	// the close dialog. OnBeforeClose checks this to allow the quit through.
+	lightRefreshMu     sync.Mutex
+	lightRefreshCancel context.CancelFunc
+
+	// Self-test harness state (in-app fixture capture loop for
+	// colour-extraction regression validation).
+	selfTestMu          sync.Mutex
+	selfTestCancel      context.CancelFunc
+	selfTestWindow      *application.WebviewWindow
+	selfTestSession     *selftest.Session
+	selfTestSuiteResult *selftest.SuiteRun
+
+	// Self-test calibration (bounded coordinate search over ScreenSync knobs).
+	calibrateMu       sync.Mutex
+	calibrateRunning  bool
+	calibrateCancel   context.CancelFunc
+	calibrateSceneID  string
+	calibrateReport   *selftest.CalibrationReport
+	calibrateRollback map[string]store.ScreenSyncConfig // sceneID -> cfg before last Apply
+
+	// selfTestPageReady is closed when the fixture popup's React page has
+	// mounted and subscribed to `selftest:fixture-url`. Reset on each
+	// popup recreation. Used by the suite/loop to gate the first URL
+	// emission and avoid the cold-boot mount race that caused the first
+	// fixture to capture only the empty placeholder.
+	selfTestPageReady chan struct{}
+	// selfTestPopupGen increments each time a new fixture WebviewWindow is
+	// created. WindowClosing hooks capture the generation so a delayed close
+	// from an old window cannot clear page-ready / cancel a newer suite or
+	// calibration run (e.g. stop calibration then immediately Run Full Suite).
+	selfTestPopupGen uint64
+
 	quitConfirmed bool
 }
 
@@ -50,23 +84,46 @@ func NewApp() *App {
 	return &App{}
 }
 
-func (a *App) startup(ctx context.Context) {
-	a.ctx = ctx
+func (a *App) setMainWindow(w application.Window) {
+	a.mainWindow = w
+}
 
+// prewarmControllers populates LIFX and Elgato controller caches from stored
+// devices so the frontend can fetch light states immediately on load.
+func (a *App) prewarmControllers(ctx context.Context, devices []lights.Device) {
+	// Elgato: register known devices by IP so getClient finds them without reconnect race.
+	for _, d := range devices {
+		if d.Brand != lights.BrandElgato || d.LastIP == "" {
+			continue
+		}
+		a.elgatoCtrl.AddDevice(d.LastIP)
+	}
+
+	// LIFX: run discovery in background. Frontend may still hit before it completes,
+	// but we reduce the race window. refreshDevices retries after 2s if some devices miss.
+	go func() {
+		time.Sleep(200 * time.Millisecond) // let startup finish
+		lifxCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if discovered, err := a.lifxCtrl.Discover(lifxCtx); err == nil && len(discovered) > 0 {
+			slog.Info("Pre-warmed LIFX devices", "count", len(discovered))
+		}
+	}()
+}
+
+func (a *App) ServiceStartup(ctx context.Context, _ application.ServiceOptions) error {
 	s, err := store.New()
 	if err != nil {
-		runtime.LogErrorf(ctx, "Failed to initialize store: %v", err)
-		return
+		slog.Error("Failed to initialize store", "err", err)
+		return err
 	}
 	a.store = s
 
 	a.lightManager = lights.NewManager()
-
 	a.lifxCtrl = lights.NewLIFXController()
 	a.hueCtrl = lights.NewHueController()
 	a.elgatoCtrl = lights.NewElgatoController()
 	a.goveeCtrl = lights.NewGoveeController()
-
 	a.lightManager.RegisterController(a.lifxCtrl)
 	a.lightManager.RegisterController(a.hueCtrl)
 	a.lightManager.RegisterController(a.elgatoCtrl)
@@ -75,76 +132,192 @@ func (a *App) startup(ctx context.Context) {
 	bridges := a.store.GetHueBridges()
 	for _, bridge := range bridges {
 		if err := a.hueCtrl.AddBridge(bridge.IP, bridge.Username); err != nil {
-			runtime.LogWarningf(ctx, "Failed to add Hue bridge %s: %v", bridge.IP, err)
+			slog.Warn("Failed to add Hue bridge", "ip", bridge.IP, "err", err)
 		}
 	}
-
 	if len(bridges) > 0 {
 		hueCtx, hueCancel := context.WithTimeout(ctx, 10*time.Second)
 		if discovered, err := a.hueCtrl.Discover(hueCtx); err == nil && len(discovered) > 0 {
-			runtime.LogInfof(ctx, "Loaded %d Hue light(s) from bridge(s)", len(discovered))
+			slog.Info("Loaded Hue lights from bridge(s)", "count", len(discovered))
 		}
 		hueCancel()
 	}
 
-	a.lightManager.SetDevices(a.store.GetDevices())
+	devices := a.store.GetDevices()
+	a.lightManager.SetDevices(devices)
+
+	// Pre-populate controller caches from stored devices so the frontend can
+	// fetch light states immediately. Without this, LIFX/Elgato would need
+	// per-device discovery on first access, causing races when both main
+	// window and popup load in parallel (Wails v3).
+	a.prewarmControllers(ctx, devices)
 
 	a.scanner = discovery.NewScanner(a.lightManager, a.elgatoCtrl)
 	a.sceneManager = scenes.NewManager(a.store, a.lightManager)
 	a.sceneManager.OnChange(func(scene store.Scene) {
-		runtime.EventsEmit(a.ctx, "scene:active", scene)
+		application.Get().Event.Emit("scene:active", scene)
 	})
 
-	// Screen Sync engine.
 	a.screenSyncEngine = screensync.NewEngine(a.lightManager)
 	a.screenSyncEngine.OnColors(func(colors []lights.Color) {
-		runtime.EventsEmit(a.ctx, "screensync:colors", colors)
+		application.Get().Event.Emit("screensync:colors", colors)
+	})
+	a.screenSyncEngine.OnTargetColors(func(colors []lights.Color) {
+		application.Get().Event.Emit("screensync:targetColors", colors)
+	})
+	a.screenSyncEngine.OnZoneColors(func(colors []lights.Color) {
+		application.Get().Event.Emit("screensync:zoneColors", colors)
 	})
 	a.screenSyncEngine.OnStats(func(s screensync.Stats) {
-		runtime.EventsEmit(a.ctx, "screensync:stats", s)
+		application.Get().Event.Emit("screensync:stats", s)
 	})
 	a.screenSyncEngine.OnState(func(running bool) {
-		runtime.EventsEmit(a.ctx, "screensync:state", map[string]interface{}{
+		application.Get().Event.Emit("screensync:state", map[string]interface{}{
 			"running": running,
 			"sceneId": a.screenSyncActiveScene,
 		})
 	})
 
 	settings := a.store.GetSettings()
+	if err := applyLaunchAtLogin(settings.LaunchAtLogin); err != nil {
+		slog.Warn("Failed to apply launch at login", "err", err)
+	}
 	interval := time.Duration(settings.PollIntervalMs) * time.Millisecond
 	if interval < 500*time.Millisecond {
 		interval = time.Second
 	}
 	a.webcamMon = webcam.NewMonitor(interval)
 	a.webcamMon.OnChange(func(cameraOn bool) {
-		runtime.EventsEmit(a.ctx, "camera:state", cameraOn)
-		a.sceneManager.OnCameraStateChange(a.ctx, cameraOn)
+		application.Get().Event.Emit("camera:state", cameraOn)
+		a.sceneManager.OnCameraStateChange(ctx, cameraOn)
 	})
-
 	go a.webcamMon.Start(ctx)
 
-	a.setupTray()
+	refreshCtx, refreshCancel := context.WithCancel(context.Background())
+	a.lightRefreshCancel = refreshCancel
+	go a.runPeriodicLightRefresh(refreshCtx)
 
-	// Emit last scene for sidebar display. Delayed so the frontend has time to
-	// load and register listeners (avoids production-build race where frontend
-	// mounts before bridge is ready; push from backend avoids frontend polling).
+	a.setupTray()
+	a.initPopupWindow()
+
 	if lastID := a.store.GetLastSceneID(); lastID != "" {
 		go func() {
 			time.Sleep(400 * time.Millisecond)
 			if scene, err := a.sceneManager.GetScene(lastID); err == nil {
-				runtime.EventsEmit(a.ctx, "app:last-scene", scene)
+				application.Get().Event.Emit("app:last-scene", scene)
 			}
 		}()
 	}
+	return nil
 }
 
-func (a *App) shutdown(ctx context.Context) {
+func (a *App) ServiceShutdown() error {
+	done := make(chan struct{})
+	go func() {
+		a.shutdown()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(4 * time.Second):
+		slog.Warn("Shutdown timed out after 4s, proceeding")
+	}
+	return nil
+}
+
+func (a *App) shutdown() {
+	if a.lightRefreshCancel != nil {
+		a.lightRefreshCancel()
+		a.lightRefreshCancel = nil
+	}
+
 	if a.screenSyncEngine != nil {
-		a.screenSyncEngine.Stop()
+		safeStop(a.screenSyncEngine.Stop)
 	}
+
+	// Brief delay so in-flight light send goroutines (from the last frame) can finish
+	// before we close the light manager. They use a 2s timeout max.
+	time.Sleep(300 * time.Millisecond)
+
 	if a.lightManager != nil {
-		_ = a.lightManager.Close()
+		safeClose(a.lightManager.Close)
 	}
+}
+
+func safeStop(fn func()) {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Warn("Recovered from panic during engine stop", "panic", r)
+		}
+	}()
+	fn()
+}
+
+func safeClose(fn func() error) {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Warn("Recovered from panic during close", "panic", r)
+		}
+	}()
+	_ = fn()
+}
+
+func (a *App) runPeriodicLightRefresh(ctx context.Context) {
+	first := true
+	for {
+		if a.store == nil {
+			return
+		}
+		s := a.store.GetSettings()
+		var wait time.Duration
+		if first {
+			wait = time.Duration(s.LightRefreshFirstDelayMinutes) * time.Minute
+			first = false
+		} else {
+			wait = time.Duration(s.LightRefreshIntervalMinutes) * time.Minute
+		}
+		if wait < time.Minute {
+			wait = time.Minute
+		}
+
+		t := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			t.Stop()
+			return
+		case <-t.C:
+			t.Stop()
+			s2 := a.store.GetSettings()
+			timeout := time.Duration(s2.LightRefreshTimeoutSeconds) * time.Second
+			if timeout < 10*time.Second {
+				timeout = 10 * time.Second
+			}
+			a.refreshLightConnections(timeout)
+		}
+	}
+}
+
+func (a *App) refreshLightConnections(timeout time.Duration) {
+	if a.lightManager == nil || a.store == nil {
+		return
+	}
+	a.lightRefreshMu.Lock()
+	defer a.lightRefreshMu.Unlock()
+
+	rctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	_, err := a.lightManager.DiscoverAllWithProgress(rctx, nil)
+	if err != nil {
+		slog.Warn("Periodic light refresh failed", "err", err)
+		return
+	}
+	if err := a.store.SetDevices(a.lightManager.GetDevices()); err != nil {
+		slog.Warn("Periodic light refresh: failed to save devices", "err", err)
+		return
+	}
+	slog.Info("Periodic light refresh completed")
+	application.Get().Event.Emit("lights:refreshed", nil)
 }
 
 // --- Discovery ---
@@ -155,11 +328,14 @@ type DiscoverResult struct {
 }
 
 func (a *App) DiscoverLights() DiscoverResult {
-	ctx, cancel := context.WithTimeout(a.ctx, 30*time.Second)
+	a.lightRefreshMu.Lock()
+	defer a.lightRefreshMu.Unlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
 	r := a.scanner.ScanAll(ctx, func(p discovery.ScanProgress) {
-		runtime.EventsEmit(a.ctx, "scan:progress", p)
+		application.Get().Event.Emit("scan:progress", p)
 	})
 
 	if err := a.store.SetDevices(a.lightManager.GetDevices()); err != nil {
@@ -181,6 +357,39 @@ func (a *App) RemoveDevice(deviceID string) error {
 	return a.store.SetDevices(a.lightManager.GetDevices())
 }
 
+// AddElgatoByIP adds an Elgato Key Light by IP when auto-discovery fails
+// (e.g. mDNS is blocked on Windows). Use the device's LAN IP (e.g. 192.168.4.73).
+func (a *App) AddElgatoByIP(ip string) (lights.Device, error) {
+	if ip == "" {
+		return lights.Device{}, fmt.Errorf("IP cannot be empty")
+	}
+	a.elgatoCtrl.AddDevice(ip)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	devices, err := a.elgatoCtrl.Discover(ctx)
+	if err != nil {
+		return lights.Device{}, fmt.Errorf("elgato discover: %w", err)
+	}
+	var added lights.Device
+	targetID := fmt.Sprintf("elgato:%s", ip)
+	for _, d := range devices {
+		if d.ID == targetID || strings.Contains(d.ID, ip) {
+			added = d
+			break
+		}
+	}
+	if added.ID == "" {
+		return lights.Device{}, fmt.Errorf("could not reach Elgato at %s (check IP and that the light is on)", ip)
+	}
+	existing := a.lightManager.GetDevices()
+	merged := append(existing, added)
+	a.lightManager.SetDevices(merged)
+	if err := a.store.SetDevices(merged); err != nil {
+		return lights.Device{}, fmt.Errorf("saved but store failed: %w", err)
+	}
+	return added, nil
+}
+
 func (a *App) SetDeviceRoom(deviceID, room string) error {
 	a.lightManager.SetDeviceRoom(deviceID, room)
 	return a.store.SetDevices(a.lightManager.GetDevices())
@@ -189,25 +398,26 @@ func (a *App) SetDeviceRoom(deviceID, room string) error {
 // --- Light Control ---
 
 func (a *App) SetLightState(deviceID string, state lights.DeviceState) error {
-	ctx, cancel := context.WithTimeout(a.ctx, 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	return a.lightManager.SetDeviceState(ctx, deviceID, state)
 }
 
 func (a *App) GetLightState(deviceID string) (lights.DeviceState, error) {
-	ctx, cancel := context.WithTimeout(a.ctx, 5*time.Second)
+	// 8s allows slow HTTP devices (Elgato) to respond when many are queried in parallel at startup
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
 	return a.lightManager.GetDeviceState(ctx, deviceID)
 }
 
 func (a *App) TurnOnLight(deviceID string) error {
-	ctx, cancel := context.WithTimeout(a.ctx, 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	return a.lightManager.TurnOn(ctx, deviceID)
 }
 
 func (a *App) TurnOffLight(deviceID string) error {
-	ctx, cancel := context.WithTimeout(a.ctx, 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	return a.lightManager.TurnOff(ctx, deviceID)
 }
@@ -249,35 +459,30 @@ func (a *App) ActivateScene(id string) error {
 		return err
 	}
 
-	// Stop any running screen sync before activating another scene.
 	if a.screenSyncEngine.IsRunning() {
 		a.stopScreenSync()
 	}
 
 	if scene.Trigger == "screen_sync" && scene.ScreenSync != nil {
 		store.NormalizeScreenSyncConfig(scene.ScreenSync)
-		// Capture pre-sync device states for later restore.
-		a.preSyncStates = a.captureDeviceStates(scene.ScreenSync.DeviceIDs)
-		// Emit scene:active without applying static device states.
+		eff := store.EffectiveScreenSyncConfig(scene.ScreenSync, a.store.GetScreenSyncPortableDefaults())
+		a.preSyncStates = a.captureDeviceStates(eff.DeviceIDs)
 		if err := a.sceneManager.MarkActive(id); err != nil {
 			return err
 		}
 		a.screenSyncActiveScene = id
-		// Blackout, start engine immediately. Engine calibrates (runs pipeline
-		// without sending) for 2s, then fades brightness up.
-		a.blackoutDevices(scene.ScreenSync.DeviceIDs)
-		return a.screenSyncEngine.Start(*scene.ScreenSync)
+		a.blackoutDevices(eff.DeviceIDs)
+		return a.screenSyncEngine.Start(eff)
 	}
 
-	ctx, cancel := context.WithTimeout(a.ctx, 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	return a.sceneManager.ActivateScene(ctx, id)
 }
 
-// captureDeviceStates reads and returns the current state of the given devices.
 func (a *App) captureDeviceStates(deviceIDs []string) map[string]lights.DeviceState {
 	states := make(map[string]lights.DeviceState, len(deviceIDs))
-	ctx, cancel := context.WithTimeout(a.ctx, 3*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	for _, id := range deviceIDs {
 		if s, err := a.lightManager.GetDeviceState(ctx, id); err == nil {
@@ -287,9 +492,8 @@ func (a *App) captureDeviceStates(deviceIDs []string) map[string]lights.DeviceSt
 	return states
 }
 
-// blackoutDevices sets all given devices to brightness 0 (lights on, fully dimmed).
 func (a *App) blackoutDevices(deviceIDs []string) {
-	ctx, cancel := context.WithTimeout(a.ctx, 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	state := lights.DeviceState{
 		On:         true,
@@ -301,14 +505,13 @@ func (a *App) blackoutDevices(deviceIDs []string) {
 	}
 }
 
-// stopScreenSync stops the engine and restores pre-sync light states.
 func (a *App) stopScreenSync() {
 	a.screenSyncEngine.Stop()
 	a.screenSyncActiveScene = ""
 	if len(a.preSyncStates) == 0 {
 		return
 	}
-	ctx, cancel := context.WithTimeout(a.ctx, 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	for id, state := range a.preSyncStates {
 		_ = a.lightManager.SetDeviceState(ctx, id, state)
@@ -320,36 +523,37 @@ func (a *App) GetActiveScene() string {
 	return a.sceneManager.GetActiveScene()
 }
 
-// GetLastSceneID returns the ID of the last scene that was activated, persisted
-// across app restarts. Returns an empty string if no scene has ever been activated.
 func (a *App) GetLastSceneID() string {
 	return a.store.GetLastSceneID()
 }
 
-// DeactivateScene clears the active scene without touching any lights.
-// Used when the user explicitly stops a scene from the sidebar.
 func (a *App) DeactivateScene() {
 	a.sceneManager.ClearActive()
 }
 
-// QuitApp is called from the frontend when the user confirms they want to exit.
-// It sets a bypass flag so OnBeforeClose allows the quit through, then tears
-// down the systray and requests application exit.
 func (a *App) QuitApp() {
 	a.quitConfirmed = true
-	systray.Quit()
-	runtime.Quit(a.ctx)
+
+	// Safety net: Wails' Quit() blocks indefinitely in WebView2 teardown on
+	// Windows (AppHangXProcB1). Our ServiceShutdown completes in ~300ms, so
+	// give it 1.5s total then force-exit.
+	go func() {
+		time.Sleep(1500 * time.Millisecond)
+		os.Exit(0)
+	}()
+
+	if popupWindow != nil {
+		popupWindow.Close()
+	}
+
+	application.Get().Quit()
 }
 
-// CloneScene creates a copy of the given scene with " (Copy)" appended to the name.
-// The clone gets a new ID and its trigger is cleared (cloned scenes start as manual).
 func (a *App) CloneScene(id string) (store.Scene, error) {
 	scene, err := a.sceneManager.GetScene(id)
 	if err != nil {
 		return store.Scene{}, err
 	}
-
-	// Clones are always manual (no trigger) to avoid duplicate trigger conflicts.
 	return a.sceneManager.CreateScene(
 		scene.Name+" (Copy)",
 		"",
@@ -372,7 +576,7 @@ func (a *App) CheckCameraNow() (bool, error) {
 
 func (a *App) SetMonitoringEnabled(enabled bool) {
 	a.webcamMon.SetEnabled(enabled)
-	runtime.EventsEmit(a.ctx, "monitoring:state", enabled)
+	application.Get().Event.Emit("monitoring:state", enabled)
 }
 
 func (a *App) IsMonitoringEnabled() bool {
@@ -385,9 +589,34 @@ func (a *App) GetSettings() store.Settings {
 	return a.store.GetSettings()
 }
 
+// OpenConfigFile opens the config.json file in the system's default application.
+func (a *App) OpenConfigFile() error {
+	path := a.store.ConfigPath()
+	// Ensure the config directory and file exist so the open command succeeds
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		if err := a.store.SetSettings(a.store.GetSettings()); err != nil {
+			return fmt.Errorf("ensure config file exists: %w", err)
+		}
+	}
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "windows":
+		cmd = exec.Command("cmd", "/c", "start", "", path)
+	case "darwin":
+		cmd = exec.Command("open", path)
+	default:
+		cmd = exec.Command("xdg-open", path)
+	}
+	return cmd.Start()
+}
+
 func (a *App) UpdateSettings(settings store.Settings) error {
+	store.NormalizeSettings(&settings)
 	if settings.PollIntervalMs > 0 {
 		a.webcamMon.SetInterval(time.Duration(settings.PollIntervalMs) * time.Millisecond)
+	}
+	if err := applyLaunchAtLogin(settings.LaunchAtLogin); err != nil {
+		slog.Warn("Failed to apply launch at login", "err", err)
 	}
 	return a.store.SetSettings(settings)
 }
@@ -399,11 +628,22 @@ func (a *App) AddHueBridge(ip, username string) error {
 		return err
 	}
 	bridges := a.store.GetHueBridges()
-	bridges = append(bridges, store.HueBridge{
-		ID:       uuid.New().String(),
-		IP:       ip,
-		Username: username,
-	})
+	// Upsert by IP: update existing or append new
+	found := false
+	for i := range bridges {
+		if bridges[i].IP == ip {
+			bridges[i].Username = username
+			found = true
+			break
+		}
+	}
+	if !found {
+		bridges = append(bridges, store.HueBridge{
+			ID:       uuid.New().String(),
+			IP:       ip,
+			Username: username,
+		})
+	}
 	return a.store.SetHueBridges(bridges)
 }
 
@@ -423,7 +663,7 @@ func (a *App) RemoveHueBridge(id string) error {
 }
 
 func (a *App) DiscoverHueBridges() []discovery.DiscoveredHueBridge {
-	ctx, cancel := context.WithTimeout(a.ctx, 15*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	bridges := a.scanner.DiscoverHueBridges(ctx)
 	if bridges == nil {
@@ -455,6 +695,10 @@ func (a *App) PairHueBridge(ip string) PairResult {
 		return PairResult{Error: fmt.Sprintf("cannot reach bridge: %v", err)}
 	}
 	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return PairResult{Error: fmt.Sprintf("bridge returned HTTP %d", resp.StatusCode)}
+	}
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -498,13 +742,11 @@ func (a *App) PairHueBridge(ip string) PairResult {
 
 // --- Screen Sync ---
 
-// ScreenSyncState describes the current engine state returned to the frontend.
 type ScreenSyncState struct {
 	Running bool   `json:"running"`
 	SceneID string `json:"sceneId"`
 }
 
-// GetScreenSyncState returns whether the engine is currently running and for which scene.
 func (a *App) GetScreenSyncState() ScreenSyncState {
 	return ScreenSyncState{
 		Running: a.screenSyncEngine.IsRunning(),
@@ -512,12 +754,10 @@ func (a *App) GetScreenSyncState() ScreenSyncState {
 	}
 }
 
-// StopScreenSync stops the engine and restores lights to their pre-sync states.
 func (a *App) StopScreenSync() {
 	a.stopScreenSync()
 }
 
-// UpdateScreenSyncConfig hot-reloads the engine's config and persists it.
 func (a *App) UpdateScreenSyncConfig(sceneID string, cfg store.ScreenSyncConfig) error {
 	store.NormalizeScreenSyncConfig(&cfg)
 	scene, err := a.sceneManager.GetScene(sceneID)
@@ -529,29 +769,25 @@ func (a *App) UpdateScreenSyncConfig(sceneID string, cfg store.ScreenSyncConfig)
 		return err
 	}
 	if a.screenSyncEngine.IsRunning() && a.screenSyncActiveScene == sceneID {
-		a.screenSyncEngine.UpdateConfig(cfg)
+		eff := store.EffectiveScreenSyncConfig(&cfg, a.store.GetScreenSyncPortableDefaults())
+		a.screenSyncEngine.UpdateConfig(eff)
 	}
 	return nil
 }
 
-// GetMonitors returns layout information about all active displays.
 func (a *App) GetMonitors() []capture.MonitorInfo {
 	return capture.GetMonitors()
 }
 
-// GetWindows returns a list of visible application windows.
 func (a *App) GetWindows() []capture.WindowInfo {
 	return capture.EnumWindows()
 }
 
-// GetWindowThumbnail captures a small thumbnail of the given window and returns
-// it as a base64-encoded PNG string. Returns an empty string on failure.
 func (a *App) GetWindowThumbnail(hwnd uint64) string {
 	img, err := capture.CaptureThumbnail(hwnd)
 	if err != nil {
 		return ""
 	}
-	// Encode as PNG, base64.
 	var buf bytes.Buffer
 	if err := png.Encode(&buf, img); err != nil {
 		return ""
@@ -559,19 +795,16 @@ func (a *App) GetWindowThumbnail(hwnd uint64) string {
 	return base64.StdEncoding.EncodeToString(buf.Bytes())
 }
 
-// StartRegionSelect opens the full-screen overlay and blocks until the user
-// selects a region. The result is emitted as a "screensync:region-selected" event.
-// Runs in a goroutine so it does not block the Wails RPC call.
 func (a *App) StartRegionSelect() {
 	go func() {
 		result := capture.StartRegionOverlay()
 		if result.Cancelled {
-			runtime.EventsEmit(a.ctx, "screensync:region-selected", map[string]interface{}{
+			application.Get().Event.Emit("screensync:region-selected", map[string]interface{}{
 				"cancelled": true,
 			})
 			return
 		}
-		runtime.EventsEmit(a.ctx, "screensync:region-selected", map[string]interface{}{
+		application.Get().Event.Emit("screensync:region-selected", map[string]interface{}{
 			"cancelled": false,
 			"x":         result.Region.X,
 			"y":         result.Region.Y,
@@ -581,14 +814,29 @@ func (a *App) StartRegionSelect() {
 	}()
 }
 
-// GetDefaultScreenSyncConfig returns the default configuration for a new Screen Sync scene.
 func (a *App) GetDefaultScreenSyncConfig() store.ScreenSyncConfig {
-	return store.DefaultScreenSyncConfig()
+	return store.EffectiveScreenSyncConfig(nil, a.store.GetScreenSyncPortableDefaults())
 }
 
-// GetCapturePreview returns the most recent 1-fps JPEG preview of the captured
-// image as a base64-encoded string (no data-URI prefix). Returns an empty
-// string when the engine is not running or no frame has been captured yet.
+// PromoteLastCalibrationToScreenSyncDefaults saves the last successful
+// calibration candidate's portable tuning as global defaults (merged into
+// scenes that still use factory values for those fields).
+func (a *App) PromoteLastCalibrationToScreenSyncDefaults() error {
+	a.calibrateMu.Lock()
+	rep := a.calibrateReport
+	a.calibrateMu.Unlock()
+	if rep == nil || rep.Error != "" {
+		return fmt.Errorf("no successful calibration report to promote")
+	}
+	p := store.BuildPortableDefaultsFromScreenSync(rep.CandidateConfig)
+	return a.store.SetScreenSyncPortableDefaults(p)
+}
+
+// ClearScreenSyncPortableDefaults removes saved global Screen Sync tuning.
+func (a *App) ClearScreenSyncPortableDefaults() error {
+	return a.store.SetScreenSyncPortableDefaults(nil)
+}
+
 func (a *App) GetCapturePreview() string {
 	if a.screenSyncEngine == nil || !a.screenSyncEngine.IsRunning() {
 		return ""
@@ -599,3 +847,6 @@ func (a *App) GetCapturePreview() string {
 	}
 	return base64.StdEncoding.EncodeToString(data)
 }
+
+
+

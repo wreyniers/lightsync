@@ -4,12 +4,15 @@ import { Lights } from "@/components/Lights";
 import { Scenes } from "@/components/Scenes";
 import { Settings } from "@/components/Settings";
 import { LightsPopupPage } from "@/components/LightsPopupPage";
+import { SelfTestPage } from "@/components/selftest/SelfTestPage";
+import { SelfTestFixturePage } from "@/components/selftest/SelfTestFixturePage";
 import { CloseConfirmDialog } from "@/components/CloseConfirmDialog";
 
 const PAGES = {
   lights: Lights,
   scenes: Scenes,
   settings: Settings,
+  selftest: SelfTestPage,
 } as const;
 
 function MainApp() {
@@ -27,8 +30,12 @@ function MainApp() {
 }
 
 function App() {
-  if (window.location.hash === "#lights-popup") {
+  const hash = window.location.hash;
+  if (hash === "#lights-popup") {
     return <LightsPopupPage />;
+  }
+  if (hash === "#self-test-fixture") {
+    return <SelfTestFixturePage />;
   }
   return <MainApp />;
 }

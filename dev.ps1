@@ -10,13 +10,13 @@ $env:Path = "C:\Program Files\Go\bin;$env:USERPROFILE\go\bin;" + $env:Path
 
 $PidFile = Join-Path $PSScriptRoot '.dev.pid'
 $LogFile = Join-Path $PSScriptRoot '.dev.log'
-$WailsExe = Join-Path "$env:USERPROFILE\go\bin" 'wails.exe'
+$Wails3Exe = Join-Path "$env:USERPROFILE\go\bin" 'wails3.exe'
 
 function Find-DevProcesses {
     $procs = @()
 
-    # The wails CLI process
-    $procs += Get-Process -Name 'wails' -ErrorAction SilentlyContinue
+    # The wails3 CLI process
+    $procs += Get-Process -Name 'wails3' -ErrorAction SilentlyContinue
 
     # The compiled Go app spawned by wails dev (lightsync-dev in dev mode)
     $procs += Get-Process -Name 'lightsync*' -ErrorAction SilentlyContinue
@@ -39,14 +39,19 @@ function Test-DevRunning {
 }
 
 function Start-Dev {
+    if (-not (Test-Path $Wails3Exe)) {
+        Write-Host "wails3 not found at $Wails3Exe" -ForegroundColor Red
+        Write-Host "Install with: go install github.com/wailsapp/wails/v3/cmd/wails3@latest" -ForegroundColor Yellow
+        return
+    }
     if (Test-DevRunning) {
         Write-Host 'Dev server is already running' -ForegroundColor Yellow
         return
     }
 
-    Write-Host 'Starting dev server...' -ForegroundColor Cyan
+    Write-Host 'Starting dev server (Wails v3)...' -ForegroundColor Cyan
 
-    $proc = Start-Process -FilePath $WailsExe -ArgumentList 'dev' `
+    $proc = Start-Process -FilePath $Wails3Exe -ArgumentList 'dev', '-config', './build/config.yml' `
         -WorkingDirectory $PSScriptRoot `
         -NoNewWindow `
         -RedirectStandardOutput $LogFile `
@@ -105,23 +110,72 @@ function Show-Log {
 }
 
 function Build-App {
+    if (-not (Test-Path $Wails3Exe)) {
+        Write-Host "wails3 not found at $Wails3Exe" -ForegroundColor Red
+        Write-Host "Install with: go install github.com/wailsapp/wails/v3/cmd/wails3@latest" -ForegroundColor Yellow
+        return
+    }
+
+    $binDir = Join-Path $PSScriptRoot 'bin'
+    $buildBinDir = Join-Path $PSScriptRoot 'build\bin'
+    if (-not (Test-Path $buildBinDir)) {
+        New-Item -ItemType Directory -Path $buildBinDir -Force | Out-Null
+    }
+
+    # ── 1. Production build (no console) ─────────────────────────────────
     Write-Host 'Building production executable...' -ForegroundColor Cyan
+    Push-Location $PSScriptRoot
+    try {
+        & $Wails3Exe task windows:build:production
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host 'Production build failed' -ForegroundColor Red
+            return
+        }
+        $prodExe = Join-Path $binDir 'lightsync.exe'
+        $size = [math]::Round((Get-Item $prodExe).Length / 1MB, 1)
+        Write-Host "Production build: bin\lightsync.exe (${size} MB)" -ForegroundColor Green
 
-    $iconIco = Join-Path $PSScriptRoot 'build\windows\icon.ico'
-    if (Test-Path $iconIco) {
-        Remove-Item $iconIco -Force
-        Write-Host '  Removed old icon.ico (will regenerate from appicon.png)' -ForegroundColor DarkGray
+        try {
+            Copy-Item $prodExe (Join-Path $buildBinDir 'lightsync.exe') -Force
+            Write-Host "  -> copied to build\bin\lightsync.exe" -ForegroundColor DarkGray
+        }
+        catch {
+            Write-Host "  Could not copy to build\bin (close LightSync if running): $_" -ForegroundColor Yellow
+        }
+    }
+    finally {
+        Pop-Location
     }
 
-    & $WailsExe build -clean
-    if ($LASTEXITCODE -eq 0) {
-        $exe = Join-Path $PSScriptRoot 'build\bin\lightsync.exe'
-        $size = [math]::Round((Get-Item $exe).Length / 1MB, 1)
-        Write-Host "Build complete: build\bin\lightsync.exe (${size} MB)" -ForegroundColor Green
+    # ── 2. Dev build (with console) ──────────────────────────────────────
+    Write-Host 'Building dev executable (with console)...' -ForegroundColor Cyan
+    Push-Location $PSScriptRoot
+    try {
+        & $Wails3Exe task windows:build
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host 'Dev build failed' -ForegroundColor Red
+            return
+        }
+        $devExe = Join-Path $binDir 'lightsync.exe'
+        $size = [math]::Round((Get-Item $devExe).Length / 1MB, 1)
+
+        $devTarget = Join-Path $binDir 'lightsync-dev.exe'
+        Move-Item $devExe $devTarget -Force
+        Write-Host "Dev build: bin\lightsync-dev.exe (${size} MB)" -ForegroundColor Green
+
+        # Restore production exe as the default in bin/
+        try {
+            Copy-Item (Join-Path $buildBinDir 'lightsync.exe') $prodExe -Force
+        }
+        catch {
+            Write-Host "  Could not restore production exe in bin\: $_" -ForegroundColor Yellow
+        }
     }
-    else {
-        Write-Host 'Build failed' -ForegroundColor Red
+    finally {
+        Pop-Location
     }
+
+    Write-Host 'Done. Production: bin\lightsync.exe  |  Dev: bin\lightsync-dev.exe' -ForegroundColor Green
 }
 
 switch ($Action) {
