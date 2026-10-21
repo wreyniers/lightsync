@@ -179,6 +179,9 @@ func (a *App) ServiceStartup(ctx context.Context, _ application.ServiceOptions) 
 	})
 
 	settings := a.store.GetSettings()
+	if err := applyLaunchAtLogin(settings.LaunchAtLogin); err != nil {
+		slog.Warn("Failed to apply launch at login", "err", err)
+	}
 	interval := time.Duration(settings.PollIntervalMs) * time.Millisecond
 	if interval < 500*time.Millisecond {
 		interval = time.Second
@@ -611,6 +614,9 @@ func (a *App) UpdateSettings(settings store.Settings) error {
 	store.NormalizeSettings(&settings)
 	if settings.PollIntervalMs > 0 {
 		a.webcamMon.SetInterval(time.Duration(settings.PollIntervalMs) * time.Millisecond)
+	}
+	if err := applyLaunchAtLogin(settings.LaunchAtLogin); err != nil {
+		slog.Warn("Failed to apply launch at login", "err", err)
 	}
 	return a.store.SetSettings(settings)
 }
