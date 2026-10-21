@@ -22,3 +22,6 @@ func isCameraOn() bool {
 	}
 	return strings.TrimSpace(string(out)) != "0"
 }
+
+// cameraEvents returns nil: macOS has no push source yet, so the monitor polls.
+func cameraEvents() <-chan struct{} { return nil }
