@@ -322,26 +322,107 @@ func mirekToKelvin(mirek int) int {
 	return 1000000 / mirek
 }
 
+// hsbToXY converts an HSB triple to a CIE xy chromaticity clamped to Hue
+// gamut C (the widest of the Hue gamuts — covers newer bulbs; older gamut-A/B
+// bulbs still accept gamut-C points but clamp them internally, which is the
+// same behaviour the bridge applies anyway).
+//
+// Pipeline: HSB → sRGB → linearised sRGB → standard sRGB-D65 XYZ matrix →
+// xy → clamp to gamut-C triangle. This replaces Philips' legacy "Wide RGB
+// D65" matrix which mapped saturated sRGB primaries well outside any Hue
+// gamut and biased clamped outputs toward magenta.
 func hsbToXY(h, s, b float64) [2]float64 {
 	r, g, bl := HSBToRGB(h, s, b)
-	rf := gammaCorrect(float64(r) / 255.0)
-	gf := gammaCorrect(float64(g) / 255.0)
-	bf := gammaCorrect(float64(bl) / 255.0)
+	rf := srgbToLinear(float64(r) / 255.0)
+	gf := srgbToLinear(float64(g) / 255.0)
+	bf := srgbToLinear(float64(bl) / 255.0)
 
-	x := rf*0.664511 + gf*0.154324 + bf*0.162028
-	y := rf*0.283881 + gf*0.668433 + bf*0.047685
-	z := rf*0.000088 + gf*0.072310 + bf*0.986039
+	// Standard sRGB D65 → XYZ (Bradford-adapted).
+	x := rf*0.4124564 + gf*0.3575761 + bf*0.1804375
+	y := rf*0.2126729 + gf*0.7151522 + bf*0.0721750
+	z := rf*0.0193339 + gf*0.1191920 + bf*0.9503041
 
 	sum := x + y + z
 	if sum == 0 {
 		return [2]float64{0.3127, 0.3290}
 	}
-	return [2]float64{x / sum, y / sum}
+	return clampToHueGamutC([2]float64{x / sum, y / sum})
 }
 
-func gammaCorrect(v float64) float64 {
+func srgbToLinear(v float64) float64 {
 	if v > 0.04045 {
 		return math.Pow((v+0.055)/1.055, 2.4)
 	}
 	return v / 12.92
+}
+
+// Hue gamut C triangle vertices (R, G, B primaries in CIE xy).
+// Source: Philips Hue developer documentation.
+var (
+	hueGamutCRed   = [2]float64{0.6915, 0.3083}
+	hueGamutCGreen = [2]float64{0.1700, 0.7000}
+	hueGamutCBlue  = [2]float64{0.1532, 0.0475}
+)
+
+// clampToHueGamutC projects p onto the closest point inside the gamut-C
+// triangle when p is outside. Points inside the triangle are returned
+// unchanged. Without this, out-of-gamut xy values (common for saturated sRGB
+// primaries) are clamped edge-wise by the bridge in ways that bias hue.
+func clampToHueGamutC(p [2]float64) [2]float64 {
+	if pointInTriangle(p, hueGamutCRed, hueGamutCGreen, hueGamutCBlue) {
+		return p
+	}
+	ab := closestPointOnSegment(p, hueGamutCRed, hueGamutCGreen)
+	bc := closestPointOnSegment(p, hueGamutCGreen, hueGamutCBlue)
+	ca := closestPointOnSegment(p, hueGamutCBlue, hueGamutCRed)
+
+	dAB := distSq(p, ab)
+	dBC := distSq(p, bc)
+	dCA := distSq(p, ca)
+
+	best := ab
+	bestD := dAB
+	if dBC < bestD {
+		best = bc
+		bestD = dBC
+	}
+	if dCA < bestD {
+		best = ca
+	}
+	return best
+}
+
+func pointInTriangle(p, a, b, c [2]float64) bool {
+	s1 := sign(p, a, b)
+	s2 := sign(p, b, c)
+	s3 := sign(p, c, a)
+	hasNeg := s1 < 0 || s2 < 0 || s3 < 0
+	hasPos := s1 > 0 || s2 > 0 || s3 > 0
+	return !(hasNeg && hasPos)
+}
+
+func sign(p, a, b [2]float64) float64 {
+	return (p[0]-b[0])*(a[1]-b[1]) - (a[0]-b[0])*(p[1]-b[1])
+}
+
+func closestPointOnSegment(p, a, b [2]float64) [2]float64 {
+	ab := [2]float64{b[0] - a[0], b[1] - a[1]}
+	ap := [2]float64{p[0] - a[0], p[1] - a[1]}
+	denom := ab[0]*ab[0] + ab[1]*ab[1]
+	if denom == 0 {
+		return a
+	}
+	t := (ap[0]*ab[0] + ap[1]*ab[1]) / denom
+	if t < 0 {
+		t = 0
+	} else if t > 1 {
+		t = 1
+	}
+	return [2]float64{a[0] + t*ab[0], a[1] + t*ab[1]}
+}
+
+func distSq(a, b [2]float64) float64 {
+	dx := a[0] - b[0]
+	dy := a[1] - b[1]
+	return dx*dx + dy*dy
 }

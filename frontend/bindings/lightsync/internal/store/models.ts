@@ -124,6 +124,48 @@ export enum ColorMode {
 };
 
 /**
+ * ColorScienceTuning holds optional extraction heuristics for scene-palette
+ * (and related) paths. Zero values mean "use engine defaults" — see accessors
+ * below. Persisted on ScreenSyncConfig so presets, JSON edits, and calibration
+ * can tune colour science without code changes.
+ */
+export class ColorScienceTuning {
+    /**
+     * BrightestPaletteChromaBias is added to per-pixel saturation before it
+     * multiplies luminance in scene-palette "brightest" histogram weighting.
+     * Higher pushes neutrals down vs colourful pixels. Default 0.12 when 0.
+     */
+    "brightestPaletteChromaBias"?: number;
+
+    /**
+     * BrightestRankMinSaturation is the minimum S used when ranking brightest
+     * palette slots by B×S. Higher demotes near-greys in slot order. Default
+     * 0.08 when 0.
+     */
+    "brightestRankMinSaturation"?: number;
+
+    /**
+     * PaletteSlotBlend is the EMA alpha from the previous frame's slot colour
+     * toward the fresh ranked colour (0–1). Default 0.5 when 0.
+     */
+    "paletteSlotBlend"?: number;
+
+    /** Creates a new ColorScienceTuning instance. */
+    constructor($$source: Partial<ColorScienceTuning> = {}) {
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new ColorScienceTuning instance from a string or object.
+     */
+    static createFrom($$source: any = {}): ColorScienceTuning {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new ColorScienceTuning($$parsedSource as Partial<ColorScienceTuning>);
+    }
+}
+
+/**
  * ExtractionMethod selects which algorithm picks the representative color.
  */
 export enum ExtractionMethod {
@@ -409,6 +451,12 @@ export class ScreenSyncConfig {
      */
     "brightnessCeiling": number;
 
+    /**
+     * ColorTuning optional weights for extraction / palette ranking heuristics.
+     * Zero sub-fields mean engine defaults; see ColorScienceTuning accessors.
+     */
+    "colorTuning"?: ColorScienceTuning;
+
     /** Creates a new ScreenSyncConfig instance. */
     constructor($$source: Partial<ScreenSyncConfig> = {}) {
         if (!("captureMode" in $$source)) {
@@ -502,12 +550,16 @@ export class ScreenSyncConfig {
     static createFrom($$source: any = {}): ScreenSyncConfig {
         const $$createField2_0 = $$createType6;
         const $$createField5_0 = $$createType7;
+        const $$createField29_0 = $$createType8;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("region" in $$parsedSource) {
             $$parsedSource["region"] = $$createField2_0($$parsedSource["region"]);
         }
         if ("deviceIds" in $$parsedSource) {
             $$parsedSource["deviceIds"] = $$createField5_0($$parsedSource["deviceIds"]);
+        }
+        if ("colorTuning" in $$parsedSource) {
+            $$parsedSource["colorTuning"] = $$createField29_0($$parsedSource["colorTuning"]);
         }
         return new ScreenSyncConfig($$parsedSource as Partial<ScreenSyncConfig>);
     }
@@ -592,3 +644,4 @@ const $$createType4 = ScreenSyncConfig.createFrom;
 const $$createType5 = $Create.Nullable($$createType4);
 const $$createType6 = CaptureRect.createFrom;
 const $$createType7 = $Create.Array($Create.Any);
+const $$createType8 = ColorScienceTuning.createFrom;

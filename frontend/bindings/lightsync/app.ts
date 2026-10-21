@@ -16,6 +16,9 @@ import * as lights$0 from "./internal/lights/models.js";
 import * as capture$0 from "./internal/screensync/capture/models.js";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
+import * as selftest$0 from "./internal/screensync/selftest/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
 import * as store$0 from "./internal/store/models.js";
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
@@ -42,6 +45,13 @@ export function AddHueBridge(ip: string, username: string): $CancellablePromise<
 
 export function CheckCameraNow(): $CancellablePromise<boolean> {
     return $Call.ByID(219071560);
+}
+
+/**
+ * ClearScreenSyncPortableDefaults removes saved global Screen Sync tuning.
+ */
+export function ClearScreenSyncPortableDefaults(): $CancellablePromise<void> {
+    return $Call.ByID(1500592316);
 }
 
 export function CloneScene(id: string): $CancellablePromise<store$0.Scene> {
@@ -140,6 +150,31 @@ export function GetScreenSyncState(): $CancellablePromise<$models.ScreenSyncStat
     });
 }
 
+/**
+ * GetSelfTestCalibrateReportJSON returns the last calibration report as JSON.
+ */
+export function GetSelfTestCalibrateReportJSON(): $CancellablePromise<string> {
+    return $Call.ByID(2266159670);
+}
+
+/**
+ * GetSelfTestDiagnostic builds a copy-pasteable diagnostic blob that
+ * captures the current session's expected/target/active state plus deltas.
+ * Returns empty string when no session is active.
+ */
+export function GetSelfTestDiagnostic(): $CancellablePromise<string> {
+    return $Call.ByID(2617013738);
+}
+
+/**
+ * GetSelfTestSuiteDiagnostic returns the aggregated suite diagnostic blob
+ * from the most recent completed run. Empty string if no suite has
+ * finished since process start.
+ */
+export function GetSelfTestSuiteDiagnostic(): $CancellablePromise<string> {
+    return $Call.ByID(1050130432);
+}
+
 export function GetSettings(): $CancellablePromise<store$0.Settings> {
     return $Call.ByID(2554697378).then(($result: any) => {
         return $$createType14($result);
@@ -161,6 +196,33 @@ export function IsMonitoringEnabled(): $CancellablePromise<boolean> {
 }
 
 /**
+ * IsSelfTestCalibrateRunning reports whether calibration is active.
+ */
+export function IsSelfTestCalibrateRunning(): $CancellablePromise<boolean> {
+    return $Call.ByID(2593520799);
+}
+
+/**
+ * ListSelfTestFixtures returns the built-in fixture catalogue for the UI.
+ */
+export function ListSelfTestFixtures(): $CancellablePromise<selftest$0.Fixture[]> {
+    return $Call.ByID(2107381833).then(($result: any) => {
+        return $$createType18($result);
+    });
+}
+
+/**
+ * ListSelfTestModes returns the full mode matrix the self-test runs per
+ * frame (~13 cells: single, multi-palette, multi-spatial with every
+ * extraction method the app exposes).
+ */
+export function ListSelfTestModes(): $CancellablePromise<selftest$0.ModeCase[]> {
+    return $Call.ByID(2206833673).then(($result: any) => {
+        return $$createType20($result);
+    });
+}
+
+/**
  * OpenConfigFile opens the config.json file in the system's default application.
  */
 export function OpenConfigFile(): $CancellablePromise<void> {
@@ -177,8 +239,17 @@ export function OpenLightsPopup(): $CancellablePromise<void> {
 
 export function PairHueBridge(ip: string): $CancellablePromise<$models.PairResult> {
     return $Call.ByID(2425822496, ip).then(($result: any) => {
-        return $$createType17($result);
+        return $$createType21($result);
     });
+}
+
+/**
+ * PromoteLastCalibrationToScreenSyncDefaults saves the last successful
+ * calibration candidate's portable tuning as global defaults (merged into
+ * scenes that still use factory values for those fields).
+ */
+export function PromoteLastCalibrationToScreenSyncDefaults(): $CancellablePromise<void> {
+    return $Call.ByID(2486888973);
 }
 
 export function QuitApp(): $CancellablePromise<void> {
@@ -191,6 +262,23 @@ export function RemoveDevice(deviceID: string): $CancellablePromise<void> {
 
 export function RemoveHueBridge(id: string): $CancellablePromise<void> {
     return $Call.ByID(1846300572, id);
+}
+
+/**
+ * SelfTestCalibrateApply persists the candidate ScreenSyncConfig from the
+ * last calibration report onto the scene. Saves the previous config for
+ * rollback.
+ */
+export function SelfTestCalibrateApply(sceneID: string): $CancellablePromise<void> {
+    return $Call.ByID(3068128212, sceneID);
+}
+
+/**
+ * SelfTestCalibrateRollback restores the ScreenSyncConfig saved at the last
+ * successful SelfTestCalibrateApply for this scene.
+ */
+export function SelfTestCalibrateRollback(sceneID: string): $CancellablePromise<void> {
+    return $Call.ByID(3896175956, sceneID);
 }
 
 export function SetDeviceRoom(deviceID: string, room: string): $CancellablePromise<void> {
@@ -209,8 +297,51 @@ export function StartRegionSelect(): $CancellablePromise<void> {
     return $Call.ByID(3020050511);
 }
 
+/**
+ * StartSelfTest opens the fullscreen fixture popup if needed, emits the
+ * selected fixture's image URL to it, and starts (or re-seats) a 1 Hz
+ * capture-extract-emit loop. Switching fixtures builds a fresh Session so
+ * smoother/handoff state resets cleanly between tests.
+ */
+export function StartSelfTest(fixtureID: string): $CancellablePromise<void> {
+    return $Call.ByID(559601041, fixtureID);
+}
+
+/**
+ * StartSelfTestCalibrate runs a bounded coordinate search over global
+ * Screen Sync knobs using the synthetic self-test subset, then stores a
+ * CalibrationReport for preview / apply. Requires self-test to be idle.
+ */
+export function StartSelfTestCalibrate(sceneID: string): $CancellablePromise<void> {
+    return $Call.ByID(571724526, sceneID);
+}
+
+/**
+ * StartSelfTestSuite walks every built-in fixture, runs the full mode
+ * matrix against each for enough frames to settle, and emits a single
+ * "selftest:suite-complete" event with the aggregated results. Progress
+ * events are emitted as each fixture advances.
+ */
+export function StartSelfTestSuite(): $CancellablePromise<void> {
+    return $Call.ByID(3794775675);
+}
+
 export function StopScreenSync(): $CancellablePromise<void> {
     return $Call.ByID(3174675542);
+}
+
+/**
+ * StopSelfTest halts the capture loop and closes the fixture popup.
+ */
+export function StopSelfTest(): $CancellablePromise<void> {
+    return $Call.ByID(1937866251);
+}
+
+/**
+ * StopSelfTestCalibrate cancels an in-progress calibration run.
+ */
+export function StopSelfTestCalibrate(): $CancellablePromise<void> {
+    return $Call.ByID(1344543600);
 }
 
 export function TurnOffLight(deviceID: string): $CancellablePromise<void> {
@@ -251,4 +382,8 @@ const $$createType13 = $models.ScreenSyncState.createFrom;
 const $$createType14 = store$0.Settings.createFrom;
 const $$createType15 = capture$0.WindowInfo.createFrom;
 const $$createType16 = $Create.Array($$createType15);
-const $$createType17 = $models.PairResult.createFrom;
+const $$createType17 = selftest$0.Fixture.createFrom;
+const $$createType18 = $Create.Array($$createType17);
+const $$createType19 = selftest$0.ModeCase.createFrom;
+const $$createType20 = $Create.Array($$createType19);
+const $$createType21 = $models.PairResult.createFrom;

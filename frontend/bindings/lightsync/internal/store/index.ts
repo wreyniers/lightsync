@@ -7,6 +7,7 @@ export {
     CaptureMode,
     CaptureRect,
     ColorMode,
+    ColorScienceTuning,
     ExtractionMethod,
     HueBridge,
     MultiColorApproach,

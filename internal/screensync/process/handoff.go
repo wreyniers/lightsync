@@ -1,4 +1,4 @@
-package screensync
+package process
 
 import (
 	"math"
@@ -8,10 +8,11 @@ import (
 	"lightsync/internal/lights"
 )
 
-// colorHandoffBlender applies a short per-device ramp after assignment changes.
-// It runs after assignment so color-slot handoffs are visually softened instead
-// of snapping abruptly.
-type colorHandoffBlender struct {
+// HandoffBlender applies a short per-device ramp after assignment changes so
+// colour-slot swaps fade smoothly instead of snapping. The engine runs it
+// after Assign and before SetState; the Self-Test harness uses it to
+// reproduce the engine's temporal behaviour one frame at a time.
+type HandoffBlender struct {
 	mu     sync.Mutex
 	states map[string]handoffState
 }
@@ -23,19 +24,22 @@ type handoffState struct {
 	duration time.Duration
 }
 
-func newColorHandoffBlender() *colorHandoffBlender {
-	return &colorHandoffBlender{states: make(map[string]handoffState)}
+// NewHandoffBlender returns an empty blender.
+func NewHandoffBlender() *HandoffBlender {
+	return &HandoffBlender{states: make(map[string]handoffState)}
 }
 
-func (b *colorHandoffBlender) Reset() {
+// Reset discards all state — useful on engine Start or a fixture change.
+func (b *HandoffBlender) Reset() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.states = make(map[string]handoffState)
 }
 
-// Snap seeds the blender with settled states so the next Blend call starts from
-// the current visible output. Used on scene cuts to preserve instant snaps.
-func (b *colorHandoffBlender) Snap(colors map[string]lights.Color) {
+// Snap seeds the blender with settled states so the next Blend call starts
+// from the current visible output. Used on scene cuts to preserve instant
+// snaps.
+func (b *HandoffBlender) Snap(colors map[string]lights.Color) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	now := time.Now()
@@ -50,9 +54,9 @@ func (b *colorHandoffBlender) Snap(colors map[string]lights.Color) {
 	}
 }
 
-// Blend applies per-device color handoff ramping.
+// Blend applies per-device colour handoff ramping toward target.
 // handoffMs <= 0 disables blending for this frame.
-func (b *colorHandoffBlender) Blend(target map[string]lights.Color, handoffMs int) map[string]lights.Color {
+func (b *HandoffBlender) Blend(target map[string]lights.Color, handoffMs int) map[string]lights.Color {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -90,8 +94,8 @@ func (b *colorHandoffBlender) Blend(target map[string]lights.Color, handoffMs in
 
 		// If target changed meaningfully, restart the handoff from the currently
 		// visible blended value so transitions stay continuous.
-		if hsbDelta(st.to, nextTarget) > 0.01 {
-			current := handoffValue(st, now)
+		if handoffHSBDelta(st.to, nextTarget) > 0.01 {
+			current := handoffValueAt(st, now)
 			st = handoffState{
 				from:     current,
 				to:       nextTarget,
@@ -102,11 +106,11 @@ func (b *colorHandoffBlender) Blend(target map[string]lights.Color, handoffMs in
 			st.duration = duration
 		}
 
-		value := handoffValue(st, now)
+		value := handoffValueAt(st, now)
 		out[id] = value
 
 		// Collapse settled states to keep precision stable.
-		if progress(st, now) >= 1.0 {
+		if handoffProgress(st, now) >= 1.0 {
 			st.from = st.to
 		}
 		nextStates[id] = st
@@ -116,8 +120,8 @@ func (b *colorHandoffBlender) Blend(target map[string]lights.Color, handoffMs in
 	return out
 }
 
-func handoffValue(st handoffState, now time.Time) lights.Color {
-	p := progress(st, now)
+func handoffValueAt(st handoffState, now time.Time) lights.Color {
+	p := handoffProgress(st, now)
 	if p <= 0 {
 		return st.from
 	}
@@ -126,10 +130,10 @@ func handoffValue(st handoffState, now time.Time) lights.Color {
 	}
 	// Ease-in-out for less robotic linear fades.
 	t := p * p * (3.0 - 2.0*p)
-	return lerpHSB(st.from, st.to, t)
+	return lerpHandoffHSB(st.from, st.to, t)
 }
 
-func progress(st handoffState, now time.Time) float64 {
+func handoffProgress(st handoffState, now time.Time) float64 {
 	if st.duration <= 0 {
 		return 1
 	}
@@ -143,7 +147,7 @@ func progress(st handoffState, now time.Time) float64 {
 	return p
 }
 
-func lerpHSB(a, b lights.Color, t float64) lights.Color {
+func lerpHandoffHSB(a, b lights.Color, t float64) lights.Color {
 	dh := b.H - a.H
 	for dh > 180 {
 		dh -= 360
@@ -167,7 +171,7 @@ func lerpHSB(a, b lights.Color, t float64) lights.Color {
 	}
 }
 
-func hsbDelta(a, b lights.Color) float64 {
+func handoffHSBDelta(a, b lights.Color) float64 {
 	dh := b.H - a.H
 	for dh > 180 {
 		dh -= 360

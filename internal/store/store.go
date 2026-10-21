@@ -44,6 +44,10 @@ type Config struct {
 
 	HueBridges  []HueBridge `json:"hueBridges,omitempty"`
 	LastSceneID string      `json:"lastSceneId,omitempty"`
+	// ScreenSyncPortableDefaults is optional global Screen Sync tuning (same
+	// fields calibration can optimize). Merged at runtime — see
+	// EffectiveScreenSyncConfig.
+	ScreenSyncPortableDefaults *ScreenSyncPortableDefaults `json:"screenSyncPortableDefaults,omitempty"`
 }
 
 type HueBridge struct {
@@ -153,6 +157,44 @@ func (s *Store) SetLastSceneID(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.config.LastSceneID = id
+	return s.saveLocked()
+}
+
+// GetScreenSyncPortableDefaults returns a deep copy of saved global tuning, or nil.
+func (s *Store) GetScreenSyncPortableDefaults() *ScreenSyncPortableDefaults {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.config.ScreenSyncPortableDefaults == nil {
+		return nil
+	}
+	b, err := json.Marshal(s.config.ScreenSyncPortableDefaults)
+	if err != nil {
+		return nil
+	}
+	var out ScreenSyncPortableDefaults
+	if err := json.Unmarshal(b, &out); err != nil {
+		return nil
+	}
+	return &out
+}
+
+// SetScreenSyncPortableDefaults persists global portable tuning (nil clears).
+func (s *Store) SetScreenSyncPortableDefaults(p *ScreenSyncPortableDefaults) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if p == nil {
+		s.config.ScreenSyncPortableDefaults = nil
+		return s.saveLocked()
+	}
+	b, err := json.Marshal(p)
+	if err != nil {
+		return err
+	}
+	var copy ScreenSyncPortableDefaults
+	if err := json.Unmarshal(b, &copy); err != nil {
+		return err
+	}
+	s.config.ScreenSyncPortableDefaults = &copy
 	return s.saveLocked()
 }
 

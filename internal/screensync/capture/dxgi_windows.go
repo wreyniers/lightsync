@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"image"
+	"log"
+	"reflect"
 	"runtime"
 	"unsafe"
 
@@ -31,7 +33,30 @@ type dxgiCapturer struct {
 	monLeft, monTop int
 	monW, monH      int
 
+	// needsSwizzle is true when DXGI handed us BGRA data (fallback path via
+	// DuplicateOutput). When it's false, DuplicateOutput1 with RGBA succeeded
+	// and the bytes are already in image.RGBA order — swapping would invert
+	// red and blue. Read from the library's internal flag at construction.
+	needsSwizzle bool
+
 	threadLocked bool
+}
+
+// dxgiNeedsSwizzle reads the unexported needsSwizzle field from the
+// outputduplication library via reflection + unsafe. The library doesn't
+// expose this information any other way, and silently guessing is worse:
+// on Win10+ we'd inadvertently swap red↔blue on every pixel (the original
+// DXGI "fix" in this file did exactly that, producing magenta-dominant
+// output regardless of screen content).
+func dxgiNeedsSwizzle(dup *outputduplication.OutputDuplicator) bool {
+	v := reflect.ValueOf(dup).Elem().FieldByName("needsSwizzle")
+	if !v.IsValid() || v.Kind() != reflect.Bool {
+		// Library upgrade changed the field name — bail out safely.
+		// DuplicateOutput1 + RGBA is the happy path on every Win10/11 build,
+		// so "assume no swizzle" matches the majority case.
+		return false
+	}
+	return *(*bool)(unsafe.Pointer(v.UnsafeAddr()))
 }
 
 func newDXGICapturer(monitorIndex int, dstW, dstH int) (*dxgiCapturer, error) {
@@ -64,17 +89,22 @@ func newDXGICapturer(monitorIndex int, dstW, dstH int) (*dxgiCapturer, error) {
 		return nil, fmt.Errorf("DXGI GetBounds failed: %w", err)
 	}
 
+	swizzle := dxgiNeedsSwizzle(ddup)
+	log.Printf("[capture] DXGI initialised for monitor %d (format=%s)",
+		monitorIndex, map[bool]string{true: "BGRA, swizzle on", false: "RGBA, no swizzle"}[swizzle])
+
 	return &dxgiCapturer{
-		device:    device,
-		deviceCtx: deviceCtx,
-		ddup:      ddup,
-		smallBuf:  image.NewRGBA(image.Rect(0, 0, dstW, dstH)),
-		dstW:      dstW,
-		dstH:      dstH,
-		monLeft:   bounds.Min.X,
-		monTop:    bounds.Min.Y,
-		monW:      bounds.Dx(),
-		monH:      bounds.Dy(),
+		device:       device,
+		deviceCtx:    deviceCtx,
+		ddup:         ddup,
+		smallBuf:     image.NewRGBA(image.Rect(0, 0, dstW, dstH)),
+		dstW:         dstW,
+		dstH:         dstH,
+		monLeft:      bounds.Min.X,
+		monTop:       bounds.Min.Y,
+		monW:         bounds.Dx(),
+		monH:         bounds.Dy(),
+		needsSwizzle: swizzle,
 		threadLocked: true,
 	}, nil
 }
@@ -127,7 +157,7 @@ func (d *dxgiCapturer) captureRect(screenX, screenY, w, h int) (*image.RGBA, err
 		return d.smallBuf, nil
 	}
 
-	downsampleCropFromMapped(data, pitch, cropX, cropY, cropW, cropH, d.smallBuf, d.dstW, d.dstH)
+	downsampleCropFromMapped(data, pitch, cropX, cropY, cropW, cropH, d.smallBuf, d.dstW, d.dstH, d.needsSwizzle)
 
 	unmap()
 	return d.smallBuf, nil
@@ -154,9 +184,36 @@ func (d *dxgiCapturer) close() {
 
 // downsampleCropFromMapped performs a nearest-neighbor downscale of a
 // sub-rectangle within the mapped GPU surface into the destination RGBA image.
-func downsampleCropFromMapped(src []byte, pitch, cropX, cropY, cropW, cropH int, dst *image.RGBA, dstW, dstH int) {
+//
+// On modern Win10/Win11 the outputduplication library uses DuplicateOutput1
+// with DXGI_FORMAT_R8G8B8A8_UNORM, so source bytes are already [R, G, B, A]
+// and we copy them straight. On older systems (or when D3D11 debug layers
+// force the fallback path), the library uses DuplicateOutput which returns
+// [B, G, R, A] and swizzle == true — in that case we swap channels 0 and 2
+// as we copy so image.RGBA.Pix ends up correct.
+func downsampleCropFromMapped(src []byte, pitch, cropX, cropY, cropW, cropH int, dst *image.RGBA, dstW, dstH int, swizzle bool) {
 	dstPix := dst.Pix
 	dstStride := dst.Stride
+
+	if swizzle {
+		for dy := 0; dy < dstH; dy++ {
+			sy := cropY + (dy*cropH+cropH/2)/dstH
+			srcRowOff := sy * pitch
+			dstRowOff := dy * dstStride
+
+			for dx := 0; dx < dstW; dx++ {
+				sx := cropX + (dx*cropW+cropW/2)/dstW
+				srcOff := srcRowOff + sx*4
+				dstOff := dstRowOff + dx*4
+
+				dstPix[dstOff] = src[srcOff+2]
+				dstPix[dstOff+1] = src[srcOff+1]
+				dstPix[dstOff+2] = src[srcOff]
+				dstPix[dstOff+3] = 255
+			}
+		}
+		return
+	}
 
 	for dy := 0; dy < dstH; dy++ {
 		sy := cropY + (dy*cropH+cropH/2)/dstH

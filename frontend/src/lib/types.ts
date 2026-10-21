@@ -35,7 +35,9 @@ export interface Color {
 export type LightMode = "color" | "kelvin";
 
 export const DEFAULT_KELVIN = 4000;
-export const APP_VERSION = "1.1.0";
+
+/** Injected from build/config.yml via Vite (see ../scripts/app-version.mjs). */
+export const APP_VERSION = __APP_VERSION__;
 
 /** Scene trigger value for Screen Sync (matches Go `internal/store/store.go`). */
 export const SCREEN_SYNC_TRIGGER = "screen_sync";

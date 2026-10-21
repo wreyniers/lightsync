@@ -14,6 +14,7 @@ import (
 
 type GoveeController struct {
 	mu         sync.RWMutex
+	logger     *slog.Logger
 	controller *govee.Controller
 	deviceMap  map[string]*govee.Device
 	started    bool
@@ -24,6 +25,7 @@ func NewGoveeController() *GoveeController {
 	ctrl := govee.NewController(logger)
 
 	return &GoveeController{
+		logger:     logger,
 		controller: ctrl,
 		deviceMap:  make(map[string]*govee.Device),
 	}
@@ -174,5 +176,8 @@ func (c *GoveeController) Close() error {
 	case <-time.After(2 * time.Second):
 		slog.Warn("Govee controller shutdown timed out")
 	}
+	// go-vee Controller is not reusable after Start/Shutdown (internal channels are
+	// closed). Periodic discovery may call Discover again, so allocate a fresh controller.
+	c.controller = govee.NewController(c.logger)
 	return nil
 }

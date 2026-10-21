@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"net"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -27,6 +29,52 @@ func NewElgatoController() *ElgatoController {
 
 func (c *ElgatoController) Brand() Brand {
 	return BrandElgato
+}
+
+// elgatoBaseURL returns the Key Light HTTP base URL (e.g. http://192.168.4.73:9123).
+// Accepts a bare IP/hostname, host:port, or a full http(s) URL — avoids double "http://".
+func elgatoBaseURL(addr string) string {
+	addr = strings.TrimSpace(addr)
+	if addr == "" {
+		return ""
+	}
+	lower := strings.ToLower(addr)
+	if strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://") {
+		u, err := url.Parse(addr)
+		if err != nil || u.Host == "" {
+			return ""
+		}
+		host := u.Hostname()
+		port := u.Port()
+		if port == "" {
+			port = "9123"
+		}
+		return "http://" + net.JoinHostPort(host, port)
+	}
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
+		port = "9123"
+	}
+	return "http://" + net.JoinHostPort(host, port)
+}
+
+// elgatoDeviceIDSuffix builds the stable part after "elgato:" (host, or host:port if non-default).
+func elgatoDeviceIDSuffix(addr string) string {
+	base := elgatoBaseURL(addr)
+	if base == "" {
+		return strings.TrimSpace(addr)
+	}
+	u, err := url.Parse(base)
+	if err != nil {
+		return addr
+	}
+	h := u.Hostname()
+	p := u.Port()
+	if p == "" || p == "9123" {
+		return h
+	}
+	return net.JoinHostPort(h, p)
 }
 
 func (c *ElgatoController) Discover(ctx context.Context) ([]Device, error) {
@@ -63,7 +111,7 @@ func (c *ElgatoController) Discover(ctx context.Context) ([]Device, error) {
 			Brand:           BrandElgato,
 			Name:            d.DisplayName,
 			Model:           d.ProductName,
-			LastIP:          addr,
+			LastIP:          elgatoBaseURL(addr),
 			LastSeen:        time.Now(),
 			SupportsColor:   false,
 			SupportsKelvin:  true,
@@ -78,8 +126,12 @@ func (c *ElgatoController) Discover(ctx context.Context) ([]Device, error) {
 }
 
 func (c *ElgatoController) AddDevice(addr string) {
-	deviceID := fmt.Sprintf("elgato:%s", addr)
-	fullAddr := fmt.Sprintf("http://%s:9123", addr)
+	fullAddr := elgatoBaseURL(addr)
+	if fullAddr == "" {
+		log.Printf("[elgato] Invalid address %q", addr)
+		return
+	}
+	deviceID := "elgato:" + elgatoDeviceIDSuffix(addr)
 	log.Printf("[elgato] Adding device %s at %s", deviceID, fullAddr)
 	client, err := keylight.NewClient(fullAddr, nil)
 	if err != nil {
@@ -218,12 +270,15 @@ func (c *ElgatoController) getClient(deviceID string) (*keylight.Client, error) 
 }
 
 func (c *ElgatoController) reconnect(deviceID string) (*keylight.Client, error) {
-	ip := ipFromDeviceID(deviceID)
-	if ip == "" {
-		return nil, fmt.Errorf("cannot extract IP from device ID %q", deviceID)
+	suffix := strings.TrimPrefix(deviceID, "elgato:")
+	if suffix == deviceID || suffix == "" {
+		return nil, fmt.Errorf("cannot parse Elgato device ID %q", deviceID)
 	}
 
-	fullAddr := fmt.Sprintf("http://%s:9123", ip)
+	fullAddr := elgatoBaseURL(suffix)
+	if fullAddr == "" {
+		return nil, fmt.Errorf("invalid address in device ID %q", deviceID)
+	}
 	log.Printf("[elgato] Reconnecting %s at %s", deviceID, fullAddr)
 	client, err := keylight.NewClient(fullAddr, nil)
 	if err != nil {
@@ -237,15 +292,6 @@ func (c *ElgatoController) reconnect(deviceID string) (*keylight.Client, error) 
 
 	log.Printf("[elgato] Reconnected %s successfully", deviceID)
 	return client, nil
-}
-
-func ipFromDeviceID(deviceID string) string {
-	// Format: "elgato:<ip>"
-	parts := strings.SplitN(deviceID, ":", 2)
-	if len(parts) != 2 {
-		return ""
-	}
-	return parts[1]
 }
 
 func (c *ElgatoController) Close() error {

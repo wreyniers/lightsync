@@ -1,4 +1,4 @@
-package screensync
+package process
 
 import (
 	"testing"
@@ -8,7 +8,7 @@ import (
 )
 
 func TestHandoffBlend_FirstFramePassThrough(t *testing.T) {
-	b := newColorHandoffBlender()
+	b := NewHandoffBlender()
 	in := map[string]lights.Color{
 		"a": {H: 30, S: 1, B: 1},
 	}
@@ -20,7 +20,7 @@ func TestHandoffBlend_FirstFramePassThrough(t *testing.T) {
 }
 
 func TestHandoffBlend_TransitionsGradually(t *testing.T) {
-	b := newColorHandoffBlender()
+	b := NewHandoffBlender()
 	_ = b.Blend(map[string]lights.Color{"a": {H: 30, S: 1, B: 1}}, 300)
 
 	_ = b.Blend(map[string]lights.Color{"a": {H: 120, S: 1, B: 1}}, 300)
@@ -38,7 +38,7 @@ func TestHandoffBlend_TransitionsGradually(t *testing.T) {
 }
 
 func TestHandoffBlend_DisabledByZeroMs(t *testing.T) {
-	b := newColorHandoffBlender()
+	b := NewHandoffBlender()
 	_ = b.Blend(map[string]lights.Color{"a": {H: 30, S: 1, B: 1}}, 250)
 
 	out := b.Blend(map[string]lights.Color{"a": {H: 210, S: 1, B: 1}}, 0)

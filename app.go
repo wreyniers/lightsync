@@ -24,6 +24,7 @@ import (
 	"lightsync/internal/scenes"
 	"lightsync/internal/screensync"
 	"lightsync/internal/screensync/capture"
+	"lightsync/internal/screensync/selftest"
 	"lightsync/internal/store"
 	"lightsync/internal/webcam"
 )
@@ -47,6 +48,34 @@ type App struct {
 
 	lightRefreshMu     sync.Mutex
 	lightRefreshCancel context.CancelFunc
+
+	// Self-test harness state (in-app fixture capture loop for
+	// colour-extraction regression validation).
+	selfTestMu          sync.Mutex
+	selfTestCancel      context.CancelFunc
+	selfTestWindow      *application.WebviewWindow
+	selfTestSession     *selftest.Session
+	selfTestSuiteResult *selftest.SuiteRun
+
+	// Self-test calibration (bounded coordinate search over ScreenSync knobs).
+	calibrateMu       sync.Mutex
+	calibrateRunning  bool
+	calibrateCancel   context.CancelFunc
+	calibrateSceneID  string
+	calibrateReport   *selftest.CalibrationReport
+	calibrateRollback map[string]store.ScreenSyncConfig // sceneID -> cfg before last Apply
+
+	// selfTestPageReady is closed when the fixture popup's React page has
+	// mounted and subscribed to `selftest:fixture-url`. Reset on each
+	// popup recreation. Used by the suite/loop to gate the first URL
+	// emission and avoid the cold-boot mount race that caused the first
+	// fixture to capture only the empty placeholder.
+	selfTestPageReady chan struct{}
+	// selfTestPopupGen increments each time a new fixture WebviewWindow is
+	// created. WindowClosing hooks capture the generation so a delayed close
+	// from an old window cannot clear page-ready / cancel a newer suite or
+	// calibration run (e.g. stop calibration then immediately Run Full Suite).
+	selfTestPopupGen uint64
 
 	quitConfirmed bool
 }
@@ -132,6 +161,9 @@ func (a *App) ServiceStartup(ctx context.Context, _ application.ServiceOptions) 
 	a.screenSyncEngine = screensync.NewEngine(a.lightManager)
 	a.screenSyncEngine.OnColors(func(colors []lights.Color) {
 		application.Get().Event.Emit("screensync:colors", colors)
+	})
+	a.screenSyncEngine.OnTargetColors(func(colors []lights.Color) {
+		application.Get().Event.Emit("screensync:targetColors", colors)
 	})
 	a.screenSyncEngine.OnZoneColors(func(colors []lights.Color) {
 		application.Get().Event.Emit("screensync:zoneColors", colors)
@@ -430,13 +462,14 @@ func (a *App) ActivateScene(id string) error {
 
 	if scene.Trigger == "screen_sync" && scene.ScreenSync != nil {
 		store.NormalizeScreenSyncConfig(scene.ScreenSync)
-		a.preSyncStates = a.captureDeviceStates(scene.ScreenSync.DeviceIDs)
+		eff := store.EffectiveScreenSyncConfig(scene.ScreenSync, a.store.GetScreenSyncPortableDefaults())
+		a.preSyncStates = a.captureDeviceStates(eff.DeviceIDs)
 		if err := a.sceneManager.MarkActive(id); err != nil {
 			return err
 		}
 		a.screenSyncActiveScene = id
-		a.blackoutDevices(scene.ScreenSync.DeviceIDs)
-		return a.screenSyncEngine.Start(*scene.ScreenSync)
+		a.blackoutDevices(eff.DeviceIDs)
+		return a.screenSyncEngine.Start(eff)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -730,7 +763,8 @@ func (a *App) UpdateScreenSyncConfig(sceneID string, cfg store.ScreenSyncConfig)
 		return err
 	}
 	if a.screenSyncEngine.IsRunning() && a.screenSyncActiveScene == sceneID {
-		a.screenSyncEngine.UpdateConfig(cfg)
+		eff := store.EffectiveScreenSyncConfig(&cfg, a.store.GetScreenSyncPortableDefaults())
+		a.screenSyncEngine.UpdateConfig(eff)
 	}
 	return nil
 }
@@ -775,7 +809,26 @@ func (a *App) StartRegionSelect() {
 }
 
 func (a *App) GetDefaultScreenSyncConfig() store.ScreenSyncConfig {
-	return store.DefaultScreenSyncConfig()
+	return store.EffectiveScreenSyncConfig(nil, a.store.GetScreenSyncPortableDefaults())
+}
+
+// PromoteLastCalibrationToScreenSyncDefaults saves the last successful
+// calibration candidate's portable tuning as global defaults (merged into
+// scenes that still use factory values for those fields).
+func (a *App) PromoteLastCalibrationToScreenSyncDefaults() error {
+	a.calibrateMu.Lock()
+	rep := a.calibrateReport
+	a.calibrateMu.Unlock()
+	if rep == nil || rep.Error != "" {
+		return fmt.Errorf("no successful calibration report to promote")
+	}
+	p := store.BuildPortableDefaultsFromScreenSync(rep.CandidateConfig)
+	return a.store.SetScreenSyncPortableDefaults(p)
+}
+
+// ClearScreenSyncPortableDefaults removes saved global Screen Sync tuning.
+func (a *App) ClearScreenSyncPortableDefaults() error {
+	return a.store.SetScreenSyncPortableDefaults(nil)
 }
 
 func (a *App) GetCapturePreview() string {

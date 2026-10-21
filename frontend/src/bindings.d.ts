@@ -23,6 +23,7 @@ declare module "@bindings" {
     GetLastSceneID(): Promise<string>;
     GetLightState(deviceID: string): Promise<any>;
     GetMonitors(): Promise<any[]>;
+    GetSelfTestDiagnostic(): Promise<string>;
     GetScene(id: string): Promise<any>;
     GetScenes(): Promise<any[]>;
     GetScreenSyncState(): Promise<{ running: boolean; sceneId?: string }>;
@@ -30,6 +31,20 @@ declare module "@bindings" {
     GetWindowThumbnail(hwnd: number): Promise<string>;
     GetWindows(): Promise<any[]>;
     IsMonitoringEnabled(): Promise<boolean>;
+    ListSelfTestFixtures(): Promise<Array<{
+      id: string;
+      label: string;
+      description: string;
+      url: string;
+      kind: "photo" | "synthetic";
+      expected?: Record<string, Array<{ h: number; s: number; b: number }>>;
+    }>>;
+    ListSelfTestModes(): Promise<Array<{
+      id: string;
+      label: string;
+      group: "single" | "palette" | "spatial";
+      config?: any;
+    }>>;
     OpenConfigFile(): Promise<void>;
     OpenLightsPopup(): Promise<void>;
     PairHueBridge(ip: string): Promise<{ success: boolean; username?: string; error?: string }>;
@@ -40,7 +55,19 @@ declare module "@bindings" {
     SetLightState(deviceID: string, state: any): Promise<void>;
     SetMonitoringEnabled(enabled: boolean): Promise<void>;
     StartRegionSelect(): Promise<void>;
+    StartSelfTest(fixtureID: string): Promise<void>;
+    StartSelfTestSuite(): Promise<void>;
+    StartSelfTestCalibrate(sceneID: string): Promise<void>;
+    StopSelfTestCalibrate(): Promise<void>;
+    IsSelfTestCalibrateRunning(): Promise<boolean>;
+    GetSelfTestCalibrateReportJSON(): Promise<string>;
+    SelfTestCalibrateApply(sceneID: string): Promise<void>;
+    SelfTestCalibrateRollback(sceneID: string): Promise<void>;
+    PromoteLastCalibrationToScreenSyncDefaults(): Promise<void>;
+    ClearScreenSyncPortableDefaults(): Promise<void>;
     StopScreenSync(): Promise<void>;
+    StopSelfTest(): Promise<void>;
+    GetSelfTestSuiteDiagnostic(): Promise<string>;
     TurnOffLight(deviceID: string): Promise<void>;
     TurnOnLight(deviceID: string): Promise<void>;
     UpdateScreenSyncConfig(sceneID: string, cfg: any): Promise<void>;

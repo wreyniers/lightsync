@@ -34,16 +34,17 @@ type Engine struct {
 	lightMgr *lights.Manager
 
 	// Event callbacks (set once before Start, not changed concurrently).
-	onColors    func([]lights.Color)
-	onZoneColors func([]lights.Color) // zone-ordered colors for spatial_grid preview only
-	onStats     func(Stats)
-	onState     func(running bool)
+	onColors       func([]lights.Color) // post-handoff device-ordered (what was just sent)
+	onTargetColors func([]lights.Color) // pre-handoff device-ordered (what handoff is ramping toward)
+	onZoneColors   func([]lights.Color) // zone-ordered colors for spatial_grid preview only
+	onStats        func(Stats)
+	onState        func(running bool)
 
 	// Pipeline state (recreated on each Start).
 	sceneChange *process.SceneChangeDetector
 	smoother    *process.TemporalSmoother
 	assigner    assign.Assigner
-	handoff     *colorHandoffBlender
+	handoff     *process.HandoffBlender
 	stats       *statsCollector
 
 	cancel  context.CancelFunc
@@ -90,14 +91,21 @@ func NewEngine(lm *lights.Manager) *Engine {
 		lightMgr:    lm,
 		sceneChange: process.NewSceneChangeDetector(),
 		smoother:    process.NewTemporalSmoother(),
-		handoff:     newColorHandoffBlender(),
+		handoff:     process.NewHandoffBlender(),
 		stats:       newStatsCollector(),
 		lastSent:    make(map[string]lights.Color),
 	}
 }
 
 // OnColors registers a callback invoked on every extracted color set (device-ordered).
+// Colours are post-handoff — i.e. the value actually being sent to the bulb on this
+// frame. Pair with OnTargetColors to show active-vs-target swatches.
 func (e *Engine) OnColors(fn func([]lights.Color)) { e.onColors = fn }
+
+// OnTargetColors registers a callback that emits the pre-handoff-blend device
+// colours — the target the handoff ramp is driving toward. When the handoff
+// ramp settles, these match the OnColors output.
+func (e *Engine) OnTargetColors(fn func([]lights.Color)) { e.onTargetColors = fn }
 
 // OnZoneColors registers a callback for zone-ordered colors (spatial_grid only).
 // Invoked with pre-assignment colors so the zone layout preview shows correct per-zone values.
@@ -408,6 +416,13 @@ func (e *Engine) run(ctx context.Context) {
 			e.stats.recordAssignmentRewired()
 		}
 
+		// Emit device-ordered TARGET colors for the UI — what the handoff is
+		// driving toward. Paired with onColors (post-handoff) the UI can show
+		// a split swatch and an alignment indicator.
+		if e.onTargetColors != nil {
+			e.onTargetColors(flattenColors(assignedColors, cfg.DeviceIDs))
+		}
+
 		// ── 5b. Post-assignment handoff blending (swap softening). ───────────
 		deviceColors := assignedColors
 		if isCut {
@@ -576,10 +591,21 @@ func (e *Engine) sendBatch(ctx context.Context, batch map[string]lights.Color) i
 		wg.Add(1)
 		go func(id string, col lights.Color) {
 			defer wg.Done()
+			// Preview swatches render with CSS hsla(H, S%, B*50%) — i.e. HSL
+			// with L capped at 0.5. That caps "whiteness added by desaturation"
+			// and is what users expect to see on the bulbs. Re-map HSB into
+			// the HSB triple that produces the same sRGB as HSL(H, S, B/2),
+			// so the bulbs match the swatches instead of rendering pastels.
+			h, s, b := col.H, col.S, col.B
+			adjS := s
+			if 1+s > 0 {
+				adjS = 2 * s / (1 + s)
+			}
+			adjB := b * (1 + s) / 2
 			state := lights.DeviceState{
 				On:         true,
-				Brightness: col.B,
-				Color:      &lights.Color{H: col.H, S: col.S, B: 1.0},
+				Brightness: adjB,
+				Color:      &lights.Color{H: h, S: adjS, B: 1.0},
 			}
 			_ = e.lightMgr.SetDeviceState(sendCtx, id, state)
 		}(devID, c)
@@ -588,21 +614,50 @@ func (e *Engine) sendBatch(ctx context.Context, batch map[string]lights.Color) i
 	return len(batch)
 }
 
-// colorChangedEnoughToSend returns true when the RGB difference between two
-// HSB colours exceeds the threshold on any channel. Lower = smoother transitions
-// (more commands); higher = fewer commands, can cause visible stepping.
+// colorChangedEnoughToSend returns true when the HSB delta between two
+// colours exceeds a sub-perceptual epsilon on any component. The comparison
+// is done in HSB space (not quantised RGB) so that heavy smoothing — which
+// produces very small per-frame deltas — still drives continuous hardware
+// transitions. With RGB-integer gating, ultra-smooth settings accumulated
+// multiple frames of sub-quantisation change into silent no-ops, then
+// released a single command whose 200ms hardware transition looked like a
+// chunky step. Per-brand send slots upstream cap the actual send rate, so
+// lowering the threshold here does not flood the network.
+//
+// Thresholds are chosen just above typical float jitter and at or below the
+// hardware resolution of every supported brand (LIFX uint16, Hue xy float32,
+// Govee/Elgato uint8), i.e. lossless to the output.
 func colorChangedEnoughToSend(prev, curr lights.Color) bool {
-	const threshold = 1 // ~0.4% of 0-255; was 3 (~1.2%)
-	pr, pg, pb := lights.HSBToRGB(prev.H, prev.S, prev.B)
-	cr, cg, cb := lights.HSBToRGB(curr.H, curr.S, curr.B)
-	diff := func(a, b uint8) int {
-		d := int(a) - int(b)
-		if d < 0 {
-			return -d
-		}
-		return d
+	const (
+		hueEps    = 0.01   // degrees (LIFX hue step ≈ 0.0055°)
+		satEps    = 1e-4   // 0.01% saturation
+		brightEps = 1e-4   // 0.01% brightness
+	)
+
+	dh := prev.H - curr.H
+	if dh < 0 {
+		dh = -dh
 	}
-	return diff(pr, cr) > threshold || diff(pg, cg) > threshold || diff(pb, cb) > threshold
+	if dh > 180 {
+		dh = 360 - dh // shortest-arc distance on the hue circle
+	}
+	if dh > hueEps {
+		return true
+	}
+
+	ds := prev.S - curr.S
+	if ds < 0 {
+		ds = -ds
+	}
+	if ds > satEps {
+		return true
+	}
+
+	db := prev.B - curr.B
+	if db < 0 {
+		db = -db
+	}
+	return db > brightEps
 }
 
 // flattenColors returns an ordered slice of colors in deviceIDs order.

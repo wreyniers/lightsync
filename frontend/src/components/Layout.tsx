@@ -10,6 +10,7 @@ import {
   Pencil,
   Play,
   Square,
+  FlaskConical,
 } from "lucide-react";
 import { ScreenSyncSidebarWidget } from "@/components/screensync/ScreenSyncSidebarWidget";
 import { APP_VERSION } from "@/lib/types";
@@ -26,6 +27,7 @@ interface LayoutProps {
 const navItems = [
   { id: "lights", label: "Lights", icon: Lightbulb },
   { id: "scenes", label: "Scenes", icon: Film },
+  { id: "selftest", label: "Self-Test", icon: FlaskConical },
   { id: "settings", label: "Settings", icon: Settings },
 ];
 

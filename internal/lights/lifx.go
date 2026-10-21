@@ -21,13 +21,52 @@ type LIFXController struct {
 	lights  map[string]light.Device
 
 	rediscoverMu sync.Mutex // serializes rediscoverDevice to avoid thundering herd
+
+	// Negative cache: device IDs that recently failed to appear in a discovery
+	// sweep, mapped to the time of the failure. Gated retries avoid burning a
+	// full 5-second UDP discovery every frame on a stale/removed device ID —
+	// which was flooding the network and starving real devices of their
+	// screen-sync colour updates.
+	failMu          sync.Mutex
+	discoverFailed  map[string]time.Time
+
+	// Power state cache. LIFX firmware interprets SetLightPower(On, 200ms) as
+	// "ramp power up to 100% over 200ms", which briefly reverts the bulb
+	// toward its default Kelvin state (warm yellow-white) before SetColor
+	// takes effect. Sending it every frame produces a visible yellow flash
+	// and brightness burst on every colour change. We therefore only send
+	// SetLightPower when the known power state actually needs to change.
+	powerMu    sync.Mutex
+	powerState map[string]bool
 }
+
+// lifxRediscoverCooldown is how long after a failed discovery we wait before
+// probing the same missing device ID again.
+const lifxRediscoverCooldown = 60 * time.Second
 
 func NewLIFXController() *LIFXController {
 	return &LIFXController{
-		devices: make(map[string]lifxlan.Device),
-		lights:  make(map[string]light.Device),
+		devices:        make(map[string]lifxlan.Device),
+		lights:         make(map[string]light.Device),
+		discoverFailed: make(map[string]time.Time),
+		powerState:     make(map[string]bool),
 	}
+}
+
+// knownPower returns the controller's cached view of whether deviceID is on.
+// The second result is false when we've never explicitly powered this device
+// — in which case the caller should send SetLightPower to establish state.
+func (c *LIFXController) knownPower(deviceID string) (on, known bool) {
+	c.powerMu.Lock()
+	defer c.powerMu.Unlock()
+	on, known = c.powerState[deviceID]
+	return on, known
+}
+
+func (c *LIFXController) recordPower(deviceID string, on bool) {
+	c.powerMu.Lock()
+	defer c.powerMu.Unlock()
+	c.powerState[deviceID] = on
 }
 
 func (c *LIFXController) Brand() Brand {
@@ -269,6 +308,11 @@ drain:
 		c.lights[deviceID] = ld
 		c.mu.Unlock()
 
+		// Clear any negative-cache entry — this device is reachable again.
+		c.failMu.Lock()
+		delete(c.discoverFailed, deviceID)
+		c.failMu.Unlock()
+
 		name := ld.Label().String()
 		if name == lifxlan.EmptyLabel {
 			name = fmt.Sprintf("LIFX %s", target)
@@ -304,11 +348,22 @@ func (c *LIFXController) SetState(ctx context.Context, deviceID string, state De
 	defer conn.Close()
 
 	if !state.On {
-		return ld.SetLightPower(ctx, conn, lifxlan.PowerOff, lifxTransition, false)
+		if err := ld.SetLightPower(ctx, conn, lifxlan.PowerOff, lifxTransition, false); err != nil {
+			return err
+		}
+		c.recordPower(deviceID, false)
+		return nil
 	}
 
-	if err := ld.SetLightPower(ctx, conn, lifxlan.PowerOn, lifxTransition, false); err != nil {
-		return err
+	// Only send SetLightPower when our view of the bulb's power state says it
+	// isn't already on. A redundant SetLightPower(On, 200ms) each frame makes
+	// the firmware briefly re-ramp toward default Kelvin white, producing a
+	// yellow flash and brightness burst between colour changes.
+	if on, known := c.knownPower(deviceID); !known || !on {
+		if err := ld.SetLightPower(ctx, conn, lifxlan.PowerOn, lifxTransition, false); err != nil {
+			return err
+		}
+		c.recordPower(deviceID, true)
 	}
 
 	color := stateToLIFXColor(state)
@@ -331,6 +386,7 @@ func (c *LIFXController) GetState(ctx context.Context, deviceID string) (DeviceS
 	if err != nil {
 		return DeviceState{}, err
 	}
+	c.recordPower(deviceID, power.On())
 
 	color, err := ld.GetColor(ctx, conn)
 	if err != nil {
@@ -354,7 +410,11 @@ func (c *LIFXController) setPower(ctx context.Context, deviceID string, power li
 		return err
 	}
 	defer conn.Close()
-	return ld.SetLightPower(ctx, conn, power, lifxTransition, false)
+	if err := ld.SetLightPower(ctx, conn, power, lifxTransition, false); err != nil {
+		return err
+	}
+	c.recordPower(deviceID, power == lifxlan.PowerOn)
+	return nil
 }
 
 func (c *LIFXController) dialWithRetry(ctx context.Context, deviceID string) (light.Device, net.Conn, error) {
@@ -386,10 +446,20 @@ func (c *LIFXController) getLight(ctx context.Context, deviceID string) (light.D
 	if ok {
 		return ld, nil
 	}
-	log.Printf("[lifx] Device %s not in cache, running discovery", deviceID)
 	return c.rediscoverDevice(ctx, deviceID)
 }
 
+// rediscoverDevice looks up a single device ID, running a UDP discovery sweep
+// when the cache is cold. It is safe to call concurrently — the rediscover
+// mutex serializes sweeps so simultaneous callers don't stack up back-to-back
+// 5-second broadcasts.
+//
+// Negative cache: a device ID that was searched for and not found is recorded,
+// and subsequent lookups within lifxRediscoverCooldown short-circuit with an
+// error instead of launching another broadcast. Without this a stale/removed
+// device ID in the saved config triggers an endless loop of 5-second sweeps,
+// saturating the LAN UDP bus and starving the four real bulbs of their
+// per-frame colour updates (observed symptom: non-smooth colour transitions).
 func (c *LIFXController) rediscoverDevice(ctx context.Context, deviceID string) (light.Device, error) {
 	c.rediscoverMu.Lock()
 	defer c.rediscoverMu.Unlock()
@@ -402,15 +472,26 @@ func (c *LIFXController) rediscoverDevice(ctx context.Context, deviceID string) 
 		return ld, nil
 	}
 
+	c.failMu.Lock()
+	lastFail, cooling := c.discoverFailed[deviceID]
+	c.failMu.Unlock()
+	if cooling && time.Since(lastFail) < lifxRediscoverCooldown {
+		return nil, fmt.Errorf("device %s not reachable (cooling down %ds)",
+			deviceID, int((lifxRediscoverCooldown-time.Since(lastFail))/time.Second))
+	}
+
+	log.Printf("[lifx] Device %s not in cache, running discovery", deviceID)
 	discoverCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-
 	_, _ = c.Discover(discoverCtx)
 
 	c.mu.RLock()
 	ld, ok = c.lights[deviceID]
 	c.mu.RUnlock()
 	if !ok {
+		c.failMu.Lock()
+		c.discoverFailed[deviceID] = time.Now()
+		c.failMu.Unlock()
 		return nil, fmt.Errorf("device %s not found after re-discovery", deviceID)
 	}
 	log.Printf("[lifx] Re-discovered %s successfully", deviceID)

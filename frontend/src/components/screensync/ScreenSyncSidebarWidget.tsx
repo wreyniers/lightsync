@@ -13,11 +13,28 @@ function openLightsPopup() {
  * Subscribes to screensync:state, screensync:stats, and screensync:colors independently
  * so it works from any page without prop-drilling.
  */
+// Perceptual alignment thresholds shared with the other swatch previews.
+const ALIGN_HUE_DEG = 3;
+const ALIGN_SAT = 0.03;
+const ALIGN_BRIGHT = 0.03;
+
+function isAligned(a: Color | undefined, b: Color | undefined): boolean {
+  if (!a || !b) return false;
+  let dh = Math.abs(a.h - b.h);
+  if (dh > 180) dh = 360 - dh;
+  return (
+    dh <= ALIGN_HUE_DEG &&
+    Math.abs(a.s - b.s) <= ALIGN_SAT &&
+    Math.abs(a.b - b.b) <= ALIGN_BRIGHT
+  );
+}
+
 export function ScreenSyncSidebarWidget() {
   const [running, setRunning] = useState(false);
   const [sceneName, setSceneName] = useState("");
   const [stats, setStats] = useState<ScreenSyncStats | null>(null);
-  const [colors, setColors] = useState<Color[]>([]);
+  const [active, setActive] = useState<Color[]>([]);
+  const [target, setTarget] = useState<Color[]>([]);
 
   const flashSceneRef = useRef(false);
   const flashColorRef = useRef(false);
@@ -40,7 +57,8 @@ export function ScreenSyncSidebarWidget() {
       setRunning(data?.running ?? false);
       if (!data?.running) {
         setStats(null);
-        setColors([]);
+        setActive([]);
+        setTarget([]);
         setSceneName("");
       }
     };
@@ -66,18 +84,20 @@ export function ScreenSyncSidebarWidget() {
       }
     };
 
-    const colorsHandler = (incoming: Color[]) => {
-      if (Array.isArray(incoming)) setColors(incoming.slice(0, 8));
+    const take = (setter: (c: Color[]) => void) => (incoming: Color[]) => {
+      if (Array.isArray(incoming)) setter(incoming.slice(0, 8));
     };
 
     const offState = Events.On("screensync:state", (e) => stateHandler(e.data));
     const offStats = Events.On("screensync:stats", (e) => statsHandler(e.data));
-    const offColors = Events.On("screensync:colors", (e) => colorsHandler(e.data));
+    const offColors = Events.On("screensync:colors", (e) => take(setActive)(e.data as Color[]));
+    const offTarget = Events.On("screensync:targetColors", (e) => take(setTarget)(e.data as Color[]));
 
     return () => {
       offState?.();
       offStats?.();
       offColors?.();
+      offTarget?.();
     };
   }, []);
 
@@ -116,20 +136,50 @@ export function ScreenSyncSidebarWidget() {
       </div>
 
       <div className="px-4 pb-3 pt-2.5 space-y-2.5">
-        {/* Live color circles */}
-        {colors.length > 0 ? (
+        {/* Live split swatches — left half = active colour sent to the bulb;
+            right half = target the handoff ramp is driving toward; white
+            outer ring appears once the two halves are perceptually aligned. */}
+        {active.length > 0 || target.length > 0 ? (
           <div className="flex gap-2 flex-wrap">
-            {colors.map((c, i) => {
-              const bg = `hsl(${c.h}, ${Math.round(c.s * 100)}%, ${Math.round(c.b * 50)}%)`;
-              const pct = Math.round(c.b * 100);
+            {Array.from({ length: Math.max(active.length, target.length) }).map((_, i) => {
+              const a = active[i];
+              const t = target[i];
+              const aligned = isAligned(a, t);
+              const aBg = a
+                ? `hsl(${a.h}, ${Math.round(a.s * 100)}%, ${Math.round(a.b * 50)}%)`
+                : "rgba(255,255,255,0.06)";
+              const tBg = t
+                ? `hsl(${t.h}, ${Math.round(t.s * 100)}%, ${Math.round(t.b * 50)}%)`
+                : "rgba(255,255,255,0.06)";
+              const pct = a ? Math.round(a.b * 100) : t ? Math.round(t.b * 100) : 0;
+
               return (
                 <div
                   key={i}
-                  className="h-8 w-8 rounded-full ring-1 ring-white/20 shadow transition-colors duration-300 shrink-0 relative flex items-center justify-center"
-                  style={{ background: bg }}
-                  title={`H:${Math.round(c.h)}° S:${Math.round(c.s * 100)}% B:${pct}%`}
+                  className={`relative h-8 w-8 rounded-full overflow-hidden shadow shrink-0 transition-shadow ${
+                    aligned ? "ring-2 ring-white/80" : "ring-1 ring-white/20"
+                  }`}
+                  title={
+                    `Slot ${i + 1}\n` +
+                    `  active:  ${a ? `H:${Math.round(a.h)}° S:${Math.round(a.s * 100)}% B:${Math.round(a.b * 100)}%` : "—"}\n` +
+                    `  target:  ${t ? `H:${Math.round(t.h)}° S:${Math.round(t.s * 100)}% B:${Math.round(t.b * 100)}%` : "—"}` +
+                    (aligned ? "\n  ✓ aligned" : "")
+                  }
                 >
-                  <span className="text-[10px] font-medium text-white drop-shadow-sm">{pct}%</span>
+                  <div
+                    className="absolute inset-y-0 left-0 w-1/2 transition-colors duration-300"
+                    style={{ background: aBg }}
+                  />
+                  <div
+                    className="absolute inset-y-0 right-0 w-1/2 transition-colors duration-300"
+                    style={{ background: tBg }}
+                  />
+                  {!aligned && (a || t) && (
+                    <span className="absolute inset-y-0 left-1/2 -translate-x-1/2 w-px bg-white/20 pointer-events-none" />
+                  )}
+                  <span className="absolute inset-0 flex items-center justify-center text-[10px] font-medium text-white drop-shadow-sm pointer-events-none">
+                    {pct}%
+                  </span>
                 </div>
               );
             })}

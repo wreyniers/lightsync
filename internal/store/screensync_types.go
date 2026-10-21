@@ -190,6 +190,10 @@ type ScreenSyncConfig struct {
 	// BrightnessCeiling is the maximum output brightness after smoothing.
 	// 1.0 = allow full brightness.
 	BrightnessCeiling float64 `json:"brightnessCeiling"` // 0.0–1.0
+
+	// ColorTuning optional weights for extraction / palette ranking heuristics.
+	// Zero sub-fields mean engine defaults; see ColorScienceTuning accessors.
+	ColorTuning ColorScienceTuning `json:"colorTuning,omitempty"`
 }
 
 // DefaultScreenSyncConfig returns a ScreenSyncConfig with sensible defaults.

@@ -2,46 +2,27 @@
 package process
 
 import (
-	"math"
-
 	"lightsync/internal/lights"
 	"lightsync/internal/store"
 )
 
-// ApplyAdjustments applies hue correction, saturation boost, and brightness
-// clamping to a slice of extracted colors. It returns a new slice; the input
-// is not modified.
+// ApplyAdjustments applies saturation boost and brightness clamping to a slice
+// of extracted colors. It returns a new slice; the input is not modified.
+//
+// Hue is passed through unchanged. A prior "warm hue correction" (+12° push on
+// 0°–60°) was removed when the screen-sync send path switched to matching the
+// preview swatches' HSL colour space, which made the compensation unnecessary
+// and overshoot into yellow.
 func ApplyAdjustments(colors []lights.Color, cfg store.ScreenSyncConfig) []lights.Color {
 	result := make([]lights.Color, len(colors))
 	minB, maxB := brightnessLimits(cfg.BrightnessMode)
 
 	for i, c := range colors {
-		h := applyWarmHueCorrection(c.H)
 		s := applySaturationBoost(c.S, cfg.SaturationBoost)
 		b := applyBrightness(c.B, cfg.BrightnessMultiplier, minB, maxB)
-		result[i] = lights.Color{H: h, S: s, B: b}
+		result[i] = lights.Color{H: c.H, S: s, B: b}
 	}
 	return result
-}
-
-// applyWarmHueCorrection pushes orange hues (H ≈ 5°–55°) toward yellow by up
-// to +12° at the peak (H ≈ 30°). This compensates for the perceptual mismatch
-// between sRGB screen orange and physical LED orange: a screen pixel at H=25°
-// reads as "orange" to human eyes, but the same hue on a light bulb looks
-// distinctly red. Nudging it toward H≈37° matches perceptual expectations.
-//
-// The correction is bell-shaped (sin envelope) so it tapers smoothly to zero
-// at pure red (H=0°) and yellow (H=60°), leaving those anchors unchanged.
-// Hues outside [0°, 60°] are returned unmodified.
-func applyWarmHueCorrection(h float64) float64 {
-	const warmRange = 60.0 // correction active window: 0° → 60°
-	const peakPush = 12.0  // maximum shift in degrees (at H≈30°)
-
-	if h <= 0 || h >= warmRange {
-		return h
-	}
-	push := peakPush * math.Sin(h/warmRange*math.Pi)
-	return h + push
 }
 
 func applySaturationBoost(s, boost float64) float64 {

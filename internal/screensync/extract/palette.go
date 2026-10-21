@@ -21,12 +21,18 @@ import (
 //     A colour family only becomes dominant once it has consistently appeared
 //     across several frames; single-frame noise cannot hijack a slot.
 //
-//  2. Greedy nearest-colour matching – when the selected colours are compared
-//     to the previous frame's output, each slot is matched to its nearest
-//     fresh colour. This prevents palette reordering from causing the appearance
-//     of simultaneous swaps across all lights.
+//  2a. Canonical slot order (brightest / saturated / vivid only) — after
+//     histogram selection, colours are sorted so slot 0 is the strongest by
+//     that metric (saturated-first by S; vivid by S×B; brightest by B×S so
+//     near-greys do not rank above pale chromatic highlights). That keeps multi-
+//     light semantics stable and matches how golden baselines are authored.
 //
-//  3. Light EMA blend – after matching, each slot is lerped 50 % toward the
+//  2b. Temporal blend — dominant & diverse still match each previous slot to
+//     the nearest unused fresh colour (reduces visible slot swaps). Brightest,
+//     saturated, and vivid instead lerp slot i toward fresh[i] after canonical
+//     sort so rank order does not drift from greedy reassignment.
+//
+//  3. Light EMA blend — each slot is lerped 50 % toward the matched / ranked
 //     fresh colour, smoothing fine residual jitter without adding perceptible lag.
 type PaletteExtractor struct {
 	mu         sync.Mutex
@@ -57,7 +63,7 @@ func (p *PaletteExtractor) Extract(img image.Image, cfg store.ScreenSyncConfig) 
 	defer p.mu.Unlock()
 
 	// --- Layer 1: histogram accumulation ---
-	freshHist := buildPaletteHistogram(img, cfg.SubMethod, cfg.WhiteBias)
+	freshHist := buildPaletteHistogram(img, cfg)
 
 	if p.accumHist == nil || histDecay == 0 {
 		p.accumHist = freshHist
@@ -77,9 +83,10 @@ func (p *PaletteExtractor) Extract(img image.Image, cfg store.ScreenSyncConfig) 
 
 	// Extract N diverse colours from the stable accumulated histogram.
 	fresh := selectFromHistogram(p.accumHist, n, cfg.SubMethod)
+	canonicalPaletteSlotOrder(fresh, cfg)
 
 	// --- Layer 2 & 3: ordering match + EMA blend ---
-	const blendAlpha = 0.5 // 50 % new per frame
+	blendAlpha := cfg.PaletteSlotBlendAlpha()
 
 	if len(p.prevColors) != n {
 		p.prevColors = make([]lights.Color, n)
@@ -88,36 +95,106 @@ func (p *PaletteExtractor) Extract(img image.Image, cfg store.ScreenSyncConfig) 
 	}
 
 	blended := make([]lights.Color, n)
-	used := make([]bool, n)
-
-	for prevIdx, prev := range p.prevColors {
-		bestDist := -1.0
-		bestFreshIdx := 0
-		for freshIdx, f := range fresh {
-			if used[freshIdx] {
-				continue
-			}
-			d := hsbColorDist(f, prev)
-			if bestDist < 0 || d < bestDist {
-				bestDist = d
-				bestFreshIdx = freshIdx
-			}
+	switch cfg.SubMethod {
+	case store.ExtractionMethodBrightest, store.ExtractionMethodSaturated, store.ExtractionMethodVivid:
+		for i := 0; i < n; i++ {
+			blended[i] = lerpHSB(p.prevColors[i], fresh[i], blendAlpha)
 		}
-		used[bestFreshIdx] = true
-		blended[prevIdx] = lerpHSB(prev, fresh[bestFreshIdx], blendAlpha)
+	default:
+		used := make([]bool, n)
+		for prevIdx, prev := range p.prevColors {
+			bestDist := -1.0
+			bestFreshIdx := 0
+			for freshIdx, f := range fresh {
+				if used[freshIdx] {
+					continue
+				}
+				d := hsbColorDist(f, prev)
+				if bestDist < 0 || d < bestDist {
+					bestDist = d
+					bestFreshIdx = freshIdx
+				}
+			}
+			used[bestFreshIdx] = true
+			blended[prevIdx] = lerpHSB(prev, fresh[bestFreshIdx], blendAlpha)
+		}
 	}
 
 	copy(p.prevColors, blended)
 	return blended
 }
 
+// canonicalPaletteSlotOrder sorts palette slots so each index has a stable
+// meaning for methods where rank is part of the product contract. Dominant and
+// diverse keep discovery order (histogram weight chain / farthest-point walk).
+func canonicalPaletteSlotOrder(cols []lights.Color, cfg store.ScreenSyncConfig) {
+	if len(cols) <= 1 {
+		return
+	}
+	switch cfg.SubMethod {
+	case store.ExtractionMethodBrightest:
+		// Rank by chroma-weighted brightness so slot 0..N-1 are "brightest
+		// colourful" swatches; raw B alone promotes clouds over pale blues.
+		minSat := cfg.BrightestRankMinSaturation()
+		brightRank := func(c lights.Color) float64 {
+			s := c.S
+			if s < minSat {
+				s = minSat
+			}
+			return c.B * s
+		}
+		sort.SliceStable(cols, func(i, j int) bool {
+			ri, rj := brightRank(cols[i]), brightRank(cols[j])
+			if ri != rj {
+				return ri > rj
+			}
+			a, b := cols[i], cols[j]
+			if a.B != b.B {
+				return a.B > b.B
+			}
+			if a.S != b.S {
+				return a.S > b.S
+			}
+			return a.H < b.H
+		})
+	case store.ExtractionMethodSaturated:
+		sort.SliceStable(cols, func(i, j int) bool {
+			a, b := cols[i], cols[j]
+			if a.S != b.S {
+				return a.S > b.S
+			}
+			if a.B != b.B {
+				return a.B > b.B
+			}
+			return a.H < b.H
+		})
+	case store.ExtractionMethodVivid:
+		sort.SliceStable(cols, func(i, j int) bool {
+			a, b := cols[i], cols[j]
+			va := a.S * a.B
+			vb := b.S * b.B
+			if va != vb {
+				return va > vb
+			}
+			if a.S != b.S {
+				return a.S > b.S
+			}
+			return a.H < b.H
+		})
+	default:
+		// dominant, diverse: order from selectFromHistogram already meaningful.
+	}
+}
+
 // buildPaletteHistogram samples the image and returns a weighted pixel count
 // per quantised RGB bucket. Weighting depends on the extraction method:
 //   - vivid:     sat × brightness  (perceptual chroma — light pinks beat dark greens)
 //   - saturated: saturation weight
-//   - brightest: luminance weight
+//   - brightest: luminance × (saturation + chromaBias) — chromaBias from
+//     cfg.ColorTuning (default 0.12) so bright greys do not out-vote saturated sky
 //   - dominant / diverse / other: uniform weight (1.0)
-func buildPaletteHistogram(img image.Image, method store.ExtractionMethod, whiteBias float64) map[[3]uint8]float64 {
+func buildPaletteHistogram(img image.Image, cfg store.ScreenSyncConfig) map[[3]uint8]float64 {
+	method := cfg.SubMethod
 	bounds := img.Bounds()
 	hist := make(map[[3]uint8]float64, 256)
 
@@ -126,7 +203,7 @@ func buildPaletteHistogram(img image.Image, method store.ExtractionMethod, white
 			c := img.At(x, y)
 			r32, g32, b32, _ := c.RGBA()
 			r, g, b := uint8(r32>>8), uint8(g32>>8), uint8(b32>>8)
-			if shouldSkipWhiteBias(r, g, b, whiteBias) {
+			if shouldSkipWhiteBias(r, g, b, cfg.WhiteBias) {
 				continue
 			}
 			qr := r / 32 * 32
@@ -149,7 +226,9 @@ func buildPaletteHistogram(img image.Image, method store.ExtractionMethod, white
 			case store.ExtractionMethodSaturated:
 				w = saturation(r, g, b) + 0.01
 			case store.ExtractionMethodBrightest:
-				w = luminance(r, g, b) + 0.01
+				sat := saturation(r, g, b)
+				bias := cfg.BrightestPaletteChromaBias()
+				w = (luminance(r, g, b) + 0.01) * (sat + bias)
 			default: // dominant, diverse
 				w = 1.0
 			}
@@ -171,8 +250,10 @@ type weightedBucket struct {
 // for all other methods it uses dominant-family selection.
 func selectFromHistogram(hist map[[3]uint8]float64, n int, method store.ExtractionMethod) []lights.Color {
 	all := make([]weightedBucket, 0, len(hist))
+	total := 0.0
 	for c, cnt := range hist {
 		all = append(all, weightedBucket{c, cnt})
+		total += cnt
 	}
 	// Stable sort with RGB tiebreaker so equal-count buckets always appear in
 	// the same order (map iteration is random in Go).
@@ -194,6 +275,26 @@ func selectFromHistogram(hist map[[3]uint8]float64, n int, method store.Extracti
 		result := make([]lights.Color, n)
 		for i := range result {
 			result[i] = fallbackColor
+		}
+		return result
+	}
+
+	// Near-monochrome guard:
+	// When one bucket dominates almost the entire weighted histogram, treat
+	// the frame as effectively single-colour and duplicate that colour across
+	// palette slots. This prevents tiny transient contamination (first-paint
+	// artefacts, edge pixels) from being surfaced as bogus extra palette
+	// colours in solid/near-solid content.
+	const monochromeDominanceRatio = 0.92
+	if total > 0 && all[0].count/total >= monochromeDominanceRatio {
+		r := float64(all[0].color[0]) / 255
+		g := float64(all[0].color[1]) / 255
+		b := float64(all[0].color[2]) / 255
+		h, s, bv := rgbToHSB(r, g, b)
+		c := lights.Color{H: h, S: s, B: bv}
+		result := make([]lights.Color, n)
+		for i := range result {
+			result[i] = c
 		}
 		return result
 	}
